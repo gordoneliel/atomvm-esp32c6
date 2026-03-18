@@ -1,8 +1,5 @@
-# AtomVM source (submodule or separate checkout)
-/AtomVM/
-
-# ESP-IDF build artifacts
-/components/
-
 # Pre-built images
 *.img
+
+# Local tool logs
+.expert/
