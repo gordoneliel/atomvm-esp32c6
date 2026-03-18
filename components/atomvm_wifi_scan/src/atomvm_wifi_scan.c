@@ -133,14 +133,11 @@ static term nif_wifi_scan(Context *ctx, int argc, term argv[])
 
         /* Authmode atom */
         const char *auth_str = authmode_str(ap->authmode);
-        term atom_auth_val = globalcontext_make_atom(glb,
-            ATOM_STR("\xFF", "placeholder")); /* placeholder, overwritten below */
-        /* Build the atom string properly */
         size_t auth_len = strlen(auth_str);
-        char atom_buf[16];
+        char atom_buf[20];
         atom_buf[0] = (char)auth_len;
         memcpy(atom_buf + 1, auth_str, auth_len);
-        atom_auth_val = globalcontext_make_atom(glb, atom_buf);
+        term atom_auth_val = globalcontext_make_atom(glb, atom_buf);
 
         /* Build proplist: [{ssid, Bin}, {rssi, Int}, {channel, Int}, {authmode, Atom}] */
         /* Build from tail to head */

@@ -50,8 +50,30 @@ defmodule Wifi do
         :io.format(~c"Network start failed: ~p\n", [reason])
     end
 
+    # Run WiFi scan test in background — retries until STA is idle
+    spawn(fn -> test_wifi_scan() end)
+
     # Keep process alive to maintain callbacks
     idle_loop()
+  end
+
+  defp test_wifi_scan do
+    :io.format(~c"[WiFi] Waiting 10s for STA to settle before scan...\n")
+    :timer.sleep(10_000)
+    :io.format(~c"[WiFi] Starting scan test...\n")
+    case :wifi_scan_nif.scan() do
+      results when is_list(results) ->
+        :io.format(~c"[WiFi] Scan found ~p networks:\n", [length(results)])
+        :lists.foreach(fn ap ->
+          ssid = :proplists.get_value(:ssid, ap, <<"?">>)
+          rssi = :proplists.get_value(:rssi, ap, 0)
+          ch = :proplists.get_value(:channel, ap, 0)
+          auth = :proplists.get_value(:authmode, ap, :unknown)
+          :io.format(~c"  ~s  rssi:~p  ch:~p  auth:~w\n", [ssid, rssi, ch, auth])
+        end, results)
+      {:error, reason} ->
+        :io.format(~c"[WiFi] Scan failed: ~p\n", [reason])
+    end
   end
 
   defp idle_loop do
