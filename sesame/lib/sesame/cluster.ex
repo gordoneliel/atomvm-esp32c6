@@ -31,6 +31,7 @@ defmodule Sesame.Cluster do
 
       err ->
         :io.format(~c"[Cluster] net_kernel failed: ~p, retrying in ~pms\n", [err, @retry_interval])
+
         :timer.sleep(@retry_interval)
         start_loop()
     end

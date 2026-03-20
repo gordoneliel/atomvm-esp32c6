@@ -10,7 +10,8 @@ defmodule Sesame.Application do
       {Sesame.Radar, {Sesame.Radar, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.Radar]},
       {Sesame.Ble, {Sesame.Ble, :start_link, []}, :permanent, :brutal_kill, :supervisor, [Sesame.Ble]},
       {Sesame.OtaServer, {Sesame.OtaServer, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.OtaServer]},
-      {Sesame.Heart, {Sesame.Heart, :start_link, []}, :temporary, :brutal_kill, :worker, [Sesame.Heart]}
+      {Sesame.Heart, {Sesame.Heart, :start_link, []}, :temporary, :brutal_kill, :worker, [Sesame.Heart]},
+      {Sesame.Ota.Updater, {Sesame.Ota.Updater, :start_link, [[manifest_url: "https://example.com/firmware/manifest.txt", poll_interval: 300_000]]}, :permanent, :brutal_kill, :worker, [Sesame.Ota.Updater]}
     ]
 
     case :supervisor.start_link({:local, :sesame_sup}, __MODULE__, child_specs) do

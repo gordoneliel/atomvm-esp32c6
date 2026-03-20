@@ -51,10 +51,34 @@ defmodule Sesame.Ble.Gatt.NetworkService do
 
     case Sesame.Wifi.scan() do
       networks when is_list(networks) ->
-        Sesame.Ble.notify(:network_result, format_scan_results(networks))
+        data = format_scan_results(networks)
+        # Send in chunks to fit within BLE MTU (~500 bytes with 512 MTU, minus 3 ATT overhead)
+        send_chunked(:network_result, data, 490)
 
       _error ->
         Sesame.Ble.notify(:network_result, <<"error">>)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast({:ble_write, :network_command, <<"connect:", rest::binary>>}, state) do
+    case :binary.split(rest, <<":">>) do
+      [ssid, psk] ->
+        :io.format(~c"[NetworkService] connecting to ~s...\n", [ssid])
+
+        case Sesame.Wifi.connect(ssid, psk) do
+          :ok ->
+            Sesame.Ble.notify(:network_result, <<"{\"status\":\"connected\",\"ssid\":\"", ssid::binary, "\"}">>)
+
+          {:error, reason} ->
+            msg = :erlang.iolist_to_binary(:io_lib.format(~c"{\"status\":\"error\",\"reason\":\"~p\"}", [reason]))
+            Sesame.Ble.notify(:network_result, msg)
+        end
+
+      _ ->
+        :io.format(~c"[NetworkService] invalid connect format, expected connect:SSID:PSK\n")
+        Sesame.Ble.notify(:network_result, <<"{\"status\":\"error\",\"reason\":\"invalid format\"}">>)
     end
 
     {:noreply, state}
@@ -75,6 +99,20 @@ defmodule Sesame.Ble.Gatt.NetworkService do
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  defp send_chunked(char_id, <<>>, _chunk_size), do: :ok
+
+  defp send_chunked(char_id, data, chunk_size) when byte_size(data) <= chunk_size do
+    Sesame.Ble.notify(char_id, data)
+  end
+
+  defp send_chunked(char_id, data, chunk_size) do
+    <<chunk::binary-size(chunk_size), rest::binary>> = data
+    Sesame.Ble.notify(char_id, chunk)
+    # Small delay between chunks so the BLE stack can flush
+    :timer.sleep(50)
+    send_chunked(char_id, rest, chunk_size)
   end
 
   defp format_scan_results(networks) do

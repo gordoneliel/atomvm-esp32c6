@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sesame BLE Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; }
+  .header { padding: 20px 24px; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #444; flex-shrink: 0; }
+  .status-dot.connected { background: #22c55e; }
+  .status-dot.connecting { background: #eab308; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  button { background: #1a1a2e; border: 1px solid #333; color: #e0e0e0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+  button:hover { background: #252540; border-color: #555; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #1d4ed8; border-color: #2563eb; }
+  button.primary:hover { background: #2563eb; }
+  button.danger { background: #991b1b; border-color: #b91c1c; }
+  button.danger:hover { background: #b91c1c; }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+  .card { background: #111; border: 1px solid #222; border-radius: 10px; overflow: hidden; }
+  .card-header { padding: 14px 18px; border-bottom: 1px solid #222; display: flex; align-items: center; justify-content: space-between; }
+  .card-header h2 { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #888; }
+  .card-body { padding: 18px; }
+  .radar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .metric { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 8px; padding: 14px; text-align: center; }
+  .metric-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .metric-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .metric-unit { font-size: 12px; color: #666; margin-left: 2px; }
+  .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .status-none { background: #1a1a1a; color: #666; }
+  .status-moving { background: #172554; color: #60a5fa; }
+  .status-still { background: #14532d; color: #4ade80; }
+  .status-both { background: #431407; color: #fb923c; }
+  .chart-container { height: 200px; background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 8px; position: relative; overflow: hidden; }
+  canvas { width: 100%; height: 100%; }
+  .controls { display: flex; gap: 8px; }
+  .network-list { list-style: none; }
+  .network-list li { padding: 10px 14px; border-bottom: 1px solid #1a1a1a; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+  .network-list li:last-child { border-bottom: none; }
+  .rssi { color: #888; font-variant-numeric: tabular-nums; }
+  .rssi-bar { width: 40px; height: 6px; background: #1a1a1a; border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; margin-left: 8px; }
+  .rssi-bar-fill { height: 100%; border-radius: 3px; }
+  .log { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; max-height: 200px; overflow-y: auto; background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 8px; padding: 12px; }
+  .log-entry { padding: 2px 0; color: #888; }
+  .log-entry .ts { color: #555; }
+  .empty-state { text-align: center; padding: 40px; color: #555; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="status-dot" id="statusDot"></div>
+  <h1>Sesame</h1>
+  <div style="flex:1"></div>
+  <button class="primary" id="connectBtn" onclick="toggleConnection()">Connect</button>
+</div>
+
+<div class="container">
+  <!-- Radar Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Radar</h2>
+      <div class="controls">
+        <span class="status-badge status-none" id="radarStatus">—</span>
+        <button id="streamBtn" onclick="toggleStreaming()" disabled>Start Stream</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="radar-grid">
+        <div class="metric">
+          <div class="metric-label">Detection</div>
+          <div class="metric-value" id="detDist">—<span class="metric-unit">cm</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Moving</div>
+          <div class="metric-value" id="moveDist">—<span class="metric-unit">cm</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Still</div>
+          <div class="metric-value" id="stillDist">—<span class="metric-unit">cm</span></div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Move Energy</div>
+          <div class="metric-value" id="moveEnergy">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Still Energy</div>
+          <div class="metric-value" id="stillEnergy">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Samples/sec</div>
+          <div class="metric-value" id="sampleRate">0</div>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="radarChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>WiFi Networks</h2>
+      <button id="scanBtn" onclick="scanNetworks()" disabled>Scan</button>
+    </div>
+    <div class="card-body">
+      <div id="connectForm" style="display:none; margin-bottom:16px; padding:14px; background:#0a0a0a; border:1px solid #1a1a1a; border-radius:8px;">
+        <div style="font-size:13px; margin-bottom:10px;">Connect to: <strong id="connectSsid"></strong></div>
+        <div style="display:flex; gap:8px;">
+          <input type="password" id="pskInput" placeholder="Password" style="flex:1; background:#111; border:1px solid #333; color:#e0e0e0; padding:8px 12px; border-radius:6px; font-size:13px; outline:none;">
+          <button id="connectWifiBtn" onclick="connectToNetwork()">Connect</button>
+          <button onclick="hideConnectForm()">Cancel</button>
+        </div>
+        <div id="connectStatus" style="font-size:12px; color:#888; margin-top:8px;"></div>
+      </div>
+      <ul class="network-list" id="networkList">
+        <li class="empty-state">Connect to device to scan networks</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Log Section -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Log</h2>
+      <button onclick="document.getElementById('logOutput').innerHTML=''">Clear</button>
+    </div>
+    <div class="card-body">
+      <div class="log" id="logOutput"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// BLE UUIDs
+const RADAR_SERVICE   = 'dfb83a12-0100-1000-8000-00805f9b34fb';
+const RADAR_STATUS    = 'dfb83a13-0100-1000-8000-00805f9b34fb';
+const RADAR_COMMAND   = 'dfb83a14-0100-1000-8000-00805f9b34fb';
+const NETWORK_SERVICE = 'dfb83b12-0100-1000-8000-00805f9b34fb';
+const NETWORK_RESULT  = 'dfb83b13-0100-1000-8000-00805f9b34fb';
+const NETWORK_COMMAND = 'dfb83b14-0100-1000-8000-00805f9b34fb';
+
+let device = null;
+let server = null;
+let radarCommandChar = null;
+let networkCommandChar = null;
+let streaming = false;
+let networkBuffer = '';
+
+// Chart data
+const CHART_POINTS = 200;
+const moveHistory = new Array(CHART_POINTS).fill(0);
+const stillHistory = new Array(CHART_POINTS).fill(0);
+const detHistory = new Array(CHART_POINTS).fill(0);
+
+// Sample rate tracking
+let sampleCount = 0;
+let lastRateUpdate = Date.now();
+
+function log(msg) {
+  const el = document.getElementById('logOutput');
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  el.innerHTML += `<div class="log-entry"><span class="ts">${ts}</span> ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(state) {
+  const dot = document.getElementById('statusDot');
+  const btn = document.getElementById('connectBtn');
+  dot.className = 'status-dot ' + state;
+  if (state === 'connected') {
+    btn.textContent = 'Disconnect';
+    btn.className = 'button danger';
+    document.getElementById('streamBtn').disabled = false;
+    document.getElementById('scanBtn').disabled = false;
+  } else if (state === 'connecting') {
+    btn.textContent = 'Connecting...';
+    btn.disabled = true;
+  } else {
+    btn.textContent = 'Connect';
+    btn.className = 'button primary';
+    btn.disabled = false;
+    document.getElementById('streamBtn').disabled = true;
+    document.getElementById('scanBtn').disabled = true;
+  }
+}
+
+async function toggleConnection() {
+  if (device && device.gatt.connected) {
+    streaming = false;
+    document.getElementById('streamBtn').textContent = 'Start Stream';
+    device.gatt.disconnect();
+    return;
+  }
+  await connect();
+}
+
+async function connect() {
+  try {
+    setStatus('connecting');
+    log('Scanning for BLE devices...');
+
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'sesame' }],
+      optionalServices: [RADAR_SERVICE, NETWORK_SERVICE]
+    });
+
+    device.addEventListener('gattserverdisconnected', () => {
+      log('Disconnected');
+      setStatus('');
+      streaming = false;
+      document.getElementById('streamBtn').textContent = 'Start Stream';
+    });
+
+    log(`Found: ${device.name}`);
+    server = await device.gatt.connect();
+    log('Connected');
+
+    // Radar service
+    const radarSvc = await server.getPrimaryService(RADAR_SERVICE);
+    const radarStatusChar = await radarSvc.getCharacteristic(RADAR_STATUS);
+    radarCommandChar = await radarSvc.getCharacteristic(RADAR_COMMAND);
+    await radarStatusChar.startNotifications();
+    radarStatusChar.addEventListener('characteristicvaluechanged', onRadarData);
+    log('Radar service ready');
+
+    // Network service
+    const netSvc = await server.getPrimaryService(NETWORK_SERVICE);
+    const netResultChar = await netSvc.getCharacteristic(NETWORK_RESULT);
+    networkCommandChar = await netSvc.getCharacteristic(NETWORK_COMMAND);
+    await netResultChar.startNotifications();
+    netResultChar.addEventListener('characteristicvaluechanged', onNetworkData);
+    log('Network service ready');
+
+    setStatus('connected');
+  } catch (err) {
+    log(`Error: ${err.message}`);
+    setStatus('');
+  }
+}
+
+function onRadarData(event) {
+  const text = new TextDecoder().decode(event.target.value);
+  // Format: "STATUS move_dist move_energy still_dist still_energy det_dist"
+  const parts = text.split(' ');
+  if (parts.length < 6) return;
+
+  const [status, moveDist, moveE, stillDist, stillE, detDist] = parts;
+
+  // Update metrics
+  const statusMap = { 'N': ['none', '—'], 'M': ['moving', 'Moving'], 'S': ['still', 'Still'], 'B': ['both', 'Both'] };
+  const [cls, label] = statusMap[status] || ['none', status];
+  const badge = document.getElementById('radarStatus');
+  badge.textContent = label;
+  badge.className = `status-badge status-${cls}`;
+
+  document.getElementById('moveDist').innerHTML = `${moveDist}<span class="metric-unit">cm</span>`;
+  document.getElementById('stillDist').innerHTML = `${stillDist}<span class="metric-unit">cm</span>`;
+  document.getElementById('detDist').innerHTML = `${detDist}<span class="metric-unit">cm</span>`;
+  document.getElementById('moveEnergy').textContent = moveE;
+  document.getElementById('stillEnergy').textContent = stillE;
+
+  // Update chart data
+  moveHistory.push(+moveDist);
+  moveHistory.shift();
+  stillHistory.push(+stillDist);
+  stillHistory.shift();
+  detHistory.push(+detDist);
+  detHistory.shift();
+
+  // Sample rate
+  sampleCount++;
+  const now = Date.now();
+  if (now - lastRateUpdate >= 1000) {
+    document.getElementById('sampleRate').textContent = sampleCount;
+    sampleCount = 0;
+    lastRateUpdate = now;
+  }
+
+  drawChart();
+}
+
+function onNetworkData(event) {
+  const chunk = new TextDecoder().decode(event.target.value);
+  networkBuffer += chunk;
+  log(`WiFi scan chunk received (${chunk.length} bytes, buffer: ${networkBuffer.length})`);
+
+  // Try to parse — if it fails, we're still accumulating chunks
+  try {
+    const networks = JSON.parse(networkBuffer);
+    networkBuffer = '';
+    document.getElementById('scanBtn').disabled = false;
+
+    const list = document.getElementById('networkList');
+    if (!networks.length) {
+      list.innerHTML = '<li class="empty-state">No networks found</li>';
+      return;
+    }
+
+    // Sort by signal strength
+    networks.sort((a, b) => (b.rssi || 0) - (a.rssi || 0));
+
+    list.innerHTML = networks.map(net => {
+      const rssi = net.rssi || 0;
+      const pct = Math.max(0, Math.min(100, (rssi + 100) * 2));
+      const color = pct > 60 ? '#22c55e' : pct > 30 ? '#eab308' : '#ef4444';
+      const ssid = net.ssid || '';
+      const clickable = ssid ? `onclick="showConnectForm('${escapeHtml(ssid).replace(/'/g, "\\'")}')" style="cursor:pointer"` : '';
+      return `<li ${clickable}>
+        <span>${escapeHtml(ssid || '(hidden)')}</span>
+        <span class="rssi">${rssi} dBm
+          <span class="rssi-bar"><span class="rssi-bar-fill" style="width:${pct}%;background:${color}"></span></span>
+        </span>
+      </li>`;
+    }).join('');
+  } catch (e) {
+    // Incomplete JSON — wait for more chunks
+    document.getElementById('networkList').innerHTML =
+      `<li class="empty-state">Receiving data... (${networkBuffer.length} bytes)</li>`;
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+let pendingConnectSsid = '';
+
+function showConnectForm(ssid) {
+  pendingConnectSsid = ssid;
+  document.getElementById('connectSsid').textContent = ssid;
+  document.getElementById('pskInput').value = '';
+  document.getElementById('connectStatus').textContent = '';
+  document.getElementById('connectForm').style.display = 'block';
+  document.getElementById('pskInput').focus();
+}
+
+function hideConnectForm() {
+  document.getElementById('connectForm').style.display = 'none';
+  pendingConnectSsid = '';
+}
+
+async function connectToNetwork() {
+  if (!networkCommandChar || !pendingConnectSsid) return;
+  const psk = document.getElementById('pskInput').value;
+  const cmd = `connect:${pendingConnectSsid}:${psk}`;
+  document.getElementById('connectStatus').textContent = 'Connecting...';
+  document.getElementById('connectWifiBtn').disabled = true;
+  log(`Sending connect command for ${pendingConnectSsid}`);
+
+  // Listen for the response via the networkBuffer mechanism
+  networkBuffer = '';
+  await networkCommandChar.writeValueWithoutResponse(new TextEncoder().encode(cmd));
+
+  // The response will come via onNetworkData notifications
+  // Add a one-time check for connect response
+  const checkInterval = setInterval(() => {
+    try {
+      const resp = JSON.parse(networkBuffer);
+      networkBuffer = '';
+      clearInterval(checkInterval);
+      document.getElementById('connectWifiBtn').disabled = false;
+      if (resp.status === 'connected') {
+        document.getElementById('connectStatus').textContent = `Connected to ${resp.ssid}`;
+        document.getElementById('connectStatus').style.color = '#4ade80';
+        log(`WiFi connected to ${resp.ssid}`);
+      } else {
+        document.getElementById('connectStatus').textContent = `Failed: ${resp.reason || 'unknown'}`;
+        document.getElementById('connectStatus').style.color = '#ef4444';
+        log(`WiFi connect failed: ${resp.reason}`);
+      }
+    } catch (e) {
+      // Still waiting
+    }
+  }, 200);
+
+  // Timeout after 30s
+  setTimeout(() => {
+    clearInterval(checkInterval);
+    document.getElementById('connectWifiBtn').disabled = false;
+    if (document.getElementById('connectStatus').textContent === 'Connecting...') {
+      document.getElementById('connectStatus').textContent = 'Timed out';
+      document.getElementById('connectStatus').style.color = '#ef4444';
+    }
+  }, 30000);
+}
+
+async function toggleStreaming() {
+  if (!radarCommandChar) return;
+  const btn = document.getElementById('streamBtn');
+
+  if (streaming) {
+    await radarCommandChar.writeValueWithoutResponse(new TextEncoder().encode('stop_streaming'));
+    streaming = false;
+    btn.textContent = 'Start Stream';
+    log('Streaming stopped');
+  } else {
+    await radarCommandChar.writeValueWithoutResponse(new TextEncoder().encode('start_streaming'));
+    streaming = true;
+    btn.textContent = 'Stop Stream';
+    log('Streaming started');
+  }
+}
+
+async function scanNetworks() {
+  if (!networkCommandChar) return;
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('networkList').innerHTML = '<li class="empty-state">Scanning...</li>';
+  log('Scanning WiFi networks...');
+
+  await networkCommandChar.writeValueWithoutResponse(new TextEncoder().encode('scan_networks'));
+
+  // Re-enable after timeout
+  setTimeout(() => {
+    document.getElementById('scanBtn').disabled = false;
+  }, 5000);
+}
+
+// Chart drawing
+function drawChart() {
+  const canvas = document.getElementById('radarChart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  if (canvas.width !== canvas.offsetWidth * dpr) {
+    canvas.width = canvas.offsetWidth * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
+  }
+
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Find max for scaling
+  const allVals = [...moveHistory, ...stillHistory, ...detHistory];
+  const maxVal = Math.max(100, ...allVals) * 1.1;
+
+  // Grid lines
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = (i / 4) * h;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  // Draw lines
+  function drawLine(data, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - (data[i] / maxVal) * h;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  drawLine(moveHistory, '#60a5fa');
+  drawLine(stillHistory, '#4ade80');
+  drawLine(detHistory, '#f97316');
+
+  // Legend
+  ctx.font = `${11 * dpr}px -apple-system, sans-serif`;
+  const labels = [['Move', '#60a5fa'], ['Still', '#4ade80'], ['Detect', '#f97316']];
+  let lx = 10 * dpr;
+  labels.forEach(([label, color]) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, 8 * dpr, 12 * dpr, 3 * dpr);
+    ctx.fillStyle = '#888';
+    ctx.fillText(label, lx + 16 * dpr, 14 * dpr);
+    lx += ctx.measureText(label).width + 30 * dpr;
+  });
+
+  // Y-axis max label
+  ctx.fillStyle = '#555';
+  ctx.fillText(`${Math.round(maxVal)}cm`, w - 60 * dpr, 14 * dpr);
+}
+
+// Initial chart draw
+window.addEventListener('load', drawChart);
+window.addEventListener('resize', drawChart);
+</script>
+
+</body>
+</html>
