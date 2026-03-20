@@ -1,4 +1,4 @@
-defmodule OtaServer do
+defmodule Sesame.OtaServer do
   @port 8266
   @chunk_size 4096
 
@@ -25,25 +25,17 @@ defmodule OtaServer do
     {:ok, <<len::32>>} = :gen_tcp.recv(sock, 4)
     :io.format(~c"[OTA] receiving ~p bytes (streaming to flash)\n", [len])
 
-    case Ota.begin_ota(len) do
-      :ok ->
-        :io.format(~c"[OTA] partition erased, receiving chunks...\n")
-        case recv_and_write(sock, len, 0) do
-          :ok ->
-            :io.format(~c"[OTA] flash write complete\n")
-            :gen_tcp.send(sock, "OK")
-            :io.format(~c"[OTA] swapping slot and rebooting...\n")
-            :timer.sleep(500)
-            Ota.swap()
-
-          {:error, reason} ->
-            :gen_tcp.send(sock, "ERR")
-            :io.format(~c"[OTA] stream write failed: ~p\n", [reason])
-        end
-
+    with :ok <- Sesame.Partition.erase(len),
+         :io.format(~c"[OTA] partition erased, receiving chunks...\n"),
+         :ok <- recv_and_write(sock, len, 0),
+         :io.format(~c"[OTA] flash write complete\n"),
+         :ok <- :gen_tcp.send(sock, "OK") do
+      :io.format(~c"[OTA] swapping slot and rebooting...\n")
+      Sesame.BootEnv.swap()
+    else
       {:error, reason} ->
         :gen_tcp.send(sock, "ERR")
-        :io.format(~c"[OTA] begin failed: ~p\n", [reason])
+        :io.format(~c"[OTA] failed: ~p\n", [reason])
     end
   end
 
@@ -54,12 +46,14 @@ defmodule OtaServer do
     {:ok, chunk} = :gen_tcp.recv(sock, chunk_size)
     received = byte_size(chunk)
 
-    case Ota.write_chunk(offset, chunk) do
+    case Sesame.Partition.write_chunk(offset, chunk) do
       :ok ->
         new_offset = offset + received
+
         if rem(new_offset, 102_400) < received do
           :io.format(~c"[OTA] ~p/~p bytes\n", [new_offset, new_offset + remaining - received])
         end
+
         recv_and_write(sock, remaining - received, new_offset)
 
       {:error, _reason} = err ->

@@ -26,7 +26,7 @@ defmodule Sesame.MixProject do
 
   defp atomvm do
     [
-      start: App,
+      start: Sesame.Application,
       flash_offset: 0x210000,
       chip: "esp32c6",
       port: "/dev/cu.usbmodem101",

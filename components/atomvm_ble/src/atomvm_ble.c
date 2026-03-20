@@ -2,9 +2,9 @@
  * atomvm_ble.c - BLE peripheral NIF for AtomVM on ESP32-C6
  *
  * Provides a minimal BLE peripheral (GATT server) interface:
- *   ble_nif:init/1       - Initialize NimBLE stack
+ *   ble_nif:init/1       - Initialize NimBLE stack (does not start host)
  *   ble_nif:add_service/2 - Register a GATT service with characteristics
- *   ble_nif:advertise/0  - Start BLE advertising
+ *   ble_nif:advertise/0  - Start host task (first call) and BLE advertising
  *   ble_nif:notify/3     - Send a GATT notification
  *
  * BLE events are delivered as messages to the calling process:
@@ -17,6 +17,7 @@
 #include <sdkconfig.h>
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* AtomVM headers */
@@ -38,6 +39,7 @@
 #include <nvs_flash.h>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
+#include <host/ble_att.h>
 #include <host/ble_hs.h>
 #include <host/ble_gap.h>
 #include <host/util/util.h>
@@ -45,6 +47,7 @@
 #include <services/gatt/ble_svc_gatt.h>
 
 #define TAG "atomvm_ble"
+#define MAX_SERVICES 4
 #define MAX_CHARACTERISTICS 8
 
 /* ---------------------------------------------------------------------------
@@ -55,12 +58,27 @@ static GlobalContext *s_global = NULL;
 static int32_t s_owner_pid = -1;          /* Erlang PID that called init/1 */
 static uint16_t s_conn_handle = 0;
 static bool s_connected = false;
+static bool s_host_started = false;
 
 static char s_device_name[32] = "atomvm";
 
 /* Characteristic value handles (populated after service registration) */
 static uint16_t s_chr_val_handles[MAX_CHARACTERISTICS];
 static int s_chr_count = 0;
+
+/* Dynamic GATT service storage — heap-allocated, must persist */
+static int s_svc_count = 0;
+
+/* Per-service: heap-allocated UUID + characteristic array + their UUIDs */
+typedef struct {
+    ble_uuid_any_t svc_uuid;
+    ble_uuid_any_t *chr_uuids;       /* array of chr_count UUIDs */
+    struct ble_gatt_chr_def *chr_defs; /* array of chr_count+1 (null terminated) */
+    struct ble_gatt_svc_def svc_def[2]; /* service + terminator */
+    int chr_count;
+} dynamic_service_t;
+
+static dynamic_service_t *s_services[MAX_SERVICES];
 
 /* ---------------------------------------------------------------------------
  * Forward declarations
@@ -73,8 +91,6 @@ static void start_advertising(void);
 
 /* ---------------------------------------------------------------------------
  * Helper: send a message to the owner Erlang process from a FreeRTOS task
- *
- * Uses port_send_message_from_task which is safe for cross-thread messaging.
  * --------------------------------------------------------------------------- */
 
 static inline term make_atom(GlobalContext *global, AtomString atom_str)
@@ -96,6 +112,62 @@ static void send_event_to_owner_2(term a, term b)
 }
 
 /* ---------------------------------------------------------------------------
+ * Helper: parse characteristic flags from Erlang atom list
+ * --------------------------------------------------------------------------- */
+
+static const AtomStringIntPair chr_flag_table[] = {
+    { ATOM_STR("\x4", "read"),         BLE_GATT_CHR_F_READ },
+    { ATOM_STR("\x5", "write"),        BLE_GATT_CHR_F_WRITE },
+    { ATOM_STR("\xC", "write_no_rsp"), BLE_GATT_CHR_F_WRITE_NO_RSP },
+    { ATOM_STR("\x6", "notify"),       BLE_GATT_CHR_F_NOTIFY },
+    { ATOM_STR("\x8", "indicate"),     BLE_GATT_CHR_F_INDICATE },
+    SELECT_INT_DEFAULT(0)
+};
+
+static ble_gatt_chr_flags parse_chr_flags(GlobalContext *glb, term flags_list)
+{
+    ble_gatt_chr_flags flags = 0;
+
+    term head = flags_list;
+    while (term_is_nonempty_list(head)) {
+        term flag = term_get_list_head(head);
+        int val = interop_atom_term_select_int(chr_flag_table, flag, glb);
+        flags |= (ble_gatt_chr_flags)val;
+        head = term_get_list_tail(head);
+    }
+
+    return flags;
+}
+
+/* ---------------------------------------------------------------------------
+ * Helper: parse a 16-byte binary into a ble_uuid_any_t (128-bit UUID)
+ *         or a 2-byte binary into a 16-bit UUID
+ * --------------------------------------------------------------------------- */
+
+static bool parse_uuid(term uuid_term, ble_uuid_any_t *out)
+{
+    if (!term_is_binary(uuid_term)) return false;
+
+    int len = term_binary_size(uuid_term);
+    const uint8_t *data = (const uint8_t *)term_binary_data(uuid_term);
+
+    if (len == 16) {
+        out->u128.u.type = BLE_UUID_TYPE_128;
+        /* NimBLE stores 128-bit UUIDs in little-endian byte order */
+        for (int i = 0; i < 16; i++) {
+            out->u128.value[i] = data[15 - i];
+        }
+        return true;
+    } else if (len == 2) {
+        out->u16.u.type = BLE_UUID_TYPE_16;
+        out->u16.value = (uint16_t)(data[0] << 8) | data[1];
+        return true;
+    }
+
+    return false;
+}
+
+/* ---------------------------------------------------------------------------
  * GATT access callback — handles reads and writes to characteristics
  * --------------------------------------------------------------------------- */
 
@@ -109,13 +181,41 @@ static int gatt_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         break;
 
     case BLE_GATT_ACCESS_OP_WRITE_CHR: {
-        ESP_LOGI(TAG, "GATT write on handle %d, len=%d",
-                 attr_handle, OS_MBUF_PKTLEN(ctxt->om));
+        uint16_t data_len = OS_MBUF_PKTLEN(ctxt->om);
+        ESP_LOGI(TAG, "GATT write on handle %d, len=%d", attr_handle, data_len);
 
-        /* TODO: Build {:ble_write, char_handle, data} tuple and send to owner
-         * This requires allocating on the process heap, which needs
-         * careful handling with AtomVM's memory model.
-         * For now, just log it. */
+        if (s_owner_pid < 0 || s_global == NULL) break;
+
+        /* Reverse-lookup: attr_handle -> characteristic index */
+        int chr_idx = -1;
+        for (int i = 0; i < s_chr_count; i++) {
+            if (s_chr_val_handles[i] == attr_handle) {
+                chr_idx = i;
+                break;
+            }
+        }
+        if (chr_idx < 0) {
+            ESP_LOGW(TAG, "Unknown attr_handle %d in write callback", attr_handle);
+            break;
+        }
+
+        /* Flatten mbuf chain into stack buffer */
+        uint8_t buf[256];
+        uint16_t copy_len = data_len > sizeof(buf) ? sizeof(buf) : data_len;
+        os_mbuf_copydata(ctxt->om, 0, copy_len, buf);
+
+        /* Send {:ble_write, chr_index, data} to owner process */
+        BEGIN_WITH_STACK_HEAP(TUPLE_SIZE(3) + term_binary_heap_size(copy_len), heap);
+        {
+            term bin = term_from_literal_binary(buf, copy_len, &heap, s_global);
+            term msg = port_heap_create_tuple3(&heap,
+                globalcontext_make_atom(s_global, ATOM_STR("\x9", "ble_write")),
+                term_from_int(chr_idx),
+                bin);
+            port_send_message_from_task(s_global,
+                term_from_local_process_id(s_owner_pid), msg);
+        }
+        END_WITH_STACK_HEAP(heap, s_global);
         break;
     }
 
@@ -125,40 +225,6 @@ static int gatt_chr_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
     return 0;
 }
-
-/* ---------------------------------------------------------------------------
- * GATT service definition
- *
- * For simplicity we define one custom service with one notify characteristic.
- * A production version would build this dynamically from the Erlang-side
- * add_service/2 call.
- * --------------------------------------------------------------------------- */
-
-/* Custom 128-bit UUIDs for radar data service */
-static const ble_uuid128_t radar_svc_uuid =
-    BLE_UUID128_INIT(0xFB, 0x34, 0x9B, 0x5F, 0x00, 0x80, 0x00, 0x80,
-                     0x00, 0x10, 0x00, 0x01, 0x12, 0x3A, 0xB8, 0xDF);
-
-static const ble_uuid128_t radar_chr_uuid =
-    BLE_UUID128_INIT(0xFB, 0x34, 0x9B, 0x5F, 0x00, 0x80, 0x00, 0x80,
-                     0x00, 0x10, 0x00, 0x01, 0x13, 0x3A, 0xB8, 0xDF);
-
-static const struct ble_gatt_svc_def gatt_svcs[] = {
-    {
-        .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = &radar_svc_uuid.u,
-        .characteristics = (struct ble_gatt_chr_def[]) {
-            {
-                .uuid = &radar_chr_uuid.u,
-                .access_cb = gatt_chr_access_cb,
-                .val_handle = &s_chr_val_handles[0],
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-            },
-            { 0 } /* terminator */
-        },
-    },
-    { 0 } /* terminator */
-};
 
 /* ---------------------------------------------------------------------------
  * GAP event handler
@@ -176,6 +242,15 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
             send_event_to_owner_2(
                 make_atom(s_global, ATOM_STR("\xD", "ble_connected")),
                 term_from_int(s_conn_handle));
+
+            /* Request faster connection parameters for higher throughput */
+            struct ble_gap_upd_params conn_params = {
+                .itvl_min = 24,             /* 30ms  (24 * 1.25ms) */
+                .itvl_max = 40,             /* 50ms  (40 * 1.25ms) */
+                .latency = 0,
+                .supervision_timeout = 300  /* 3000ms (300 * 10ms) */
+            };
+            ble_gap_update_params(s_conn_handle, &conn_params);
         } else {
             ESP_LOGW(TAG, "Connection failed, status=%d", event->connect.status);
             start_advertising();
@@ -193,15 +268,37 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
         start_advertising();
         break;
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        ESP_LOGI(TAG, "Subscribe event: cur_notify=%d, attr_handle=%d",
-                 event->subscribe.cur_notify, event->subscribe.attr_handle);
-
-        if (event->subscribe.cur_notify) {
-            send_event_to_owner_2(
-                make_atom(s_global, ATOM_STR("\xE", "ble_subscribed")),
-                term_from_int(event->subscribe.attr_handle));
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        uint16_t attr_handle = event->subscribe.attr_handle;
+        int chr_idx = -1;
+        for (int i = 0; i < s_chr_count; i++) {
+            if (s_chr_val_handles[i] == attr_handle) {
+                chr_idx = i;
+                break;
+            }
         }
+        ESP_LOGI(TAG, "Subscribe event: cur_notify=%d, attr_handle=%d, chr_idx=%d",
+                 event->subscribe.cur_notify, attr_handle, chr_idx);
+
+        if (chr_idx >= 0) {
+            if (event->subscribe.cur_notify) {
+                send_event_to_owner_2(
+                    make_atom(s_global, ATOM_STR("\xE", "ble_subscribed")),
+                    term_from_int(chr_idx));
+            } else {
+                send_event_to_owner_2(
+                    make_atom(s_global, ATOM_STR("\x10", "ble_unsubscribed")),
+                    term_from_int(chr_idx));
+            }
+        }
+        break;
+    }
+
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "MTU negotiated: %d", event->mtu.value);
+        send_event_to_owner_2(
+            make_atom(s_global, ATOM_STR("\x7", "ble_mtu")),
+            term_from_int(event->mtu.value));
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -281,6 +378,10 @@ static void ble_host_task(void *param)
 /*
  * ble_nif:init/1 - Initialize the BLE stack
  *
+ * Initializes NimBLE and GAP/GATT core services but does NOT start the
+ * host task. Call add_service/2 to register services, then advertise/0
+ * to start the host and begin advertising.
+ *
  * Args: device_name (binary/string)
  * Returns: :ok | {:error, reason}
  */
@@ -299,8 +400,6 @@ static term nif_ble_init(Context *ctx, int argc, term argv[])
         memcpy(s_device_name, term_binary_data(argv[0]), len);
         s_device_name[len] = '\0';
     }
-    /* Also accept charlists */
-    /* TODO: handle charlist conversion */
 
     ESP_LOGI(TAG, "Initializing BLE as '%s'", s_device_name);
 
@@ -313,7 +412,6 @@ static term nif_ble_init(Context *ctx, int argc, term argv[])
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "NVS init failed: %d", ret);
-        /* Return {:error, :nvs_failed} */
         term error_tuple = term_alloc_tuple(2, &ctx->heap);
         term_put_tuple_element(error_tuple, 0, ERROR_ATOM);
         term_put_tuple_element(error_tuple, 1,
@@ -335,27 +433,187 @@ static term nif_ble_init(Context *ctx, int argc, term argv[])
     /* Set device name for GAP */
     ble_svc_gap_device_name_set(s_device_name);
 
-    /* Register GATT services */
+    /* Initialize GAP and GATT core services */
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    rc = ble_gatts_count_cfg(gatt_svcs);
-    assert(rc == 0);
-    rc = ble_gatts_add_svcs(gatt_svcs);
-    assert(rc == 0);
+    /* Reset dynamic service state */
+    s_svc_count = 0;
+    s_chr_count = 0;
+    s_host_started = false;
 
-    /* Set sync callback */
-    ble_hs_cfg.sync_cb = ble_on_sync;
-
-    /* Start host task */
-    nimble_port_freertos_init(ble_host_task);
-
-    ESP_LOGI(TAG, "BLE initialized successfully");
+    ESP_LOGI(TAG, "BLE initialized (call add_service then advertise)");
     return OK_ATOM;
 }
 
 /*
- * ble_nif:advertise/0 - Start advertising (re-advertise after stop)
+ * ble_nif:add_service/2 - Register a GATT service dynamically
+ *
+ * Args:
+ *   service_uuid (binary) - 16-byte (128-bit) or 2-byte (16-bit) UUID
+ *   characteristics (list) - [{:characteristic, uuid_binary, [flag_atoms]}, ...]
+ *
+ * Must be called after init/1 and before advertise/0.
+ * Returns: :ok | {:error, reason}
+ */
+static term nif_ble_add_service(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+
+    if (s_host_started) {
+        ESP_LOGE(TAG, "add_service: host already started");
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\xF", "already_started")));
+        return t;
+    }
+
+    if (s_svc_count >= MAX_SERVICES) {
+        ESP_LOGE(TAG, "add_service: max services reached");
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\x8", "max_svcs")));
+        return t;
+    }
+
+    /* Parse service UUID */
+    ble_uuid_any_t svc_uuid;
+    if (!parse_uuid(argv[0], &svc_uuid)) {
+        ESP_LOGE(TAG, "add_service: invalid service UUID");
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\xB", "bad_svc_uuid")));
+        return t;
+    }
+
+    /* Count characteristics */
+    int chr_count = 0;
+    term chr_list = argv[1];
+    term tmp = chr_list;
+    while (term_is_nonempty_list(tmp)) {
+        chr_count++;
+        tmp = term_get_list_tail(tmp);
+    }
+
+    if (s_chr_count + chr_count > MAX_CHARACTERISTICS) {
+        ESP_LOGE(TAG, "add_service: too many characteristics (%d + %d > %d)",
+                 s_chr_count, chr_count, MAX_CHARACTERISTICS);
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\x8", "max_chrs")));
+        return t;
+    }
+
+    /* Allocate persistent storage for this service */
+    dynamic_service_t *svc = calloc(1, sizeof(dynamic_service_t));
+    if (!svc) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    svc->chr_count = chr_count;
+    svc->svc_uuid = svc_uuid;
+
+    /* Allocate characteristic UUIDs and definitions (chr_count + 1 for terminator) */
+    svc->chr_uuids = calloc(chr_count, sizeof(ble_uuid_any_t));
+    svc->chr_defs = calloc(chr_count + 1, sizeof(struct ble_gatt_chr_def));
+    if (!svc->chr_uuids || !svc->chr_defs) {
+        free(svc->chr_uuids);
+        free(svc->chr_defs);
+        free(svc);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    /* Parse each characteristic: {:characteristic, uuid_binary, [flags]} */
+    tmp = chr_list;
+    for (int i = 0; i < chr_count; i++) {
+        term chr_tuple = term_get_list_head(tmp);
+        tmp = term_get_list_tail(tmp);
+
+        if (!term_is_tuple(chr_tuple) || term_get_tuple_arity(chr_tuple) != 3) {
+            ESP_LOGE(TAG, "add_service: bad characteristic tuple at index %d", i);
+            free(svc->chr_uuids);
+            free(svc->chr_defs);
+            free(svc);
+            term t = term_alloc_tuple(2, &ctx->heap);
+            term_put_tuple_element(t, 0, ERROR_ATOM);
+            term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\x7", "bad_chr")));
+            return t;
+        }
+
+        /* argv[1] of tuple = UUID binary */
+        term chr_uuid_term = term_get_tuple_element(chr_tuple, 1);
+        if (!parse_uuid(chr_uuid_term, &svc->chr_uuids[i])) {
+            ESP_LOGE(TAG, "add_service: bad characteristic UUID at index %d", i);
+            free(svc->chr_uuids);
+            free(svc->chr_defs);
+            free(svc);
+            term t = term_alloc_tuple(2, &ctx->heap);
+            term_put_tuple_element(t, 0, ERROR_ATOM);
+            term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\xB", "bad_chr_uuid")));
+            return t;
+        }
+
+        /* argv[2] of tuple = flags list */
+        term flags_term = term_get_tuple_element(chr_tuple, 2);
+        ble_gatt_chr_flags flags = parse_chr_flags(glb, flags_term);
+
+        int handle_idx = s_chr_count + i;
+        svc->chr_defs[i].uuid = &svc->chr_uuids[i].u;
+        svc->chr_defs[i].access_cb = gatt_chr_access_cb;
+        svc->chr_defs[i].val_handle = &s_chr_val_handles[handle_idx];
+        svc->chr_defs[i].flags = flags;
+
+        ESP_LOGI(TAG, "  chr[%d]: flags=0x%04x, handle_idx=%d",
+                 i, flags, handle_idx);
+    }
+    /* Terminator already zero from calloc */
+
+    /* Build service definition */
+    svc->svc_def[0].type = BLE_GATT_SVC_TYPE_PRIMARY;
+    svc->svc_def[0].uuid = &svc->svc_uuid.u;
+    svc->svc_def[0].characteristics = svc->chr_defs;
+    /* svc_def[1] is terminator (zero from calloc) */
+
+    /* Register with NimBLE */
+    int rc = ble_gatts_count_cfg(svc->svc_def);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_count_cfg failed: %d", rc);
+        free(svc->chr_uuids);
+        free(svc->chr_defs);
+        free(svc);
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\x9", "count_cfg")));
+        return t;
+    }
+
+    rc = ble_gatts_add_svcs(svc->svc_def);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_add_svcs failed: %d", rc);
+        free(svc->chr_uuids);
+        free(svc->chr_defs);
+        free(svc);
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\x8", "add_svcs")));
+        return t;
+    }
+
+    s_services[s_svc_count] = svc;
+    s_svc_count++;
+    s_chr_count += chr_count;
+
+    ESP_LOGI(TAG, "Service added: %d characteristics (total: %d chrs across %d svcs)",
+             chr_count, s_chr_count, s_svc_count);
+    return OK_ATOM;
+}
+
+/*
+ * ble_nif:advertise/0 - Start host task (first call) and BLE advertising
+ *
+ * On first call, starts the NimBLE host task which triggers ble_on_sync
+ * and begins advertising. Subsequent calls restart advertising.
  */
 static term nif_ble_advertise(Context *ctx, int argc, term argv[])
 {
@@ -363,7 +621,17 @@ static term nif_ble_advertise(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
-    start_advertising();
+    if (!s_host_started) {
+        /* Set sync callback and preferred MTU before starting host */
+        ble_hs_cfg.sync_cb = ble_on_sync;
+        ble_att_set_preferred_mtu(512);
+        nimble_port_freertos_init(ble_host_task);
+        s_host_started = true;
+        ESP_LOGI(TAG, "Host task started (preferred MTU=512), will advertise on sync");
+    } else {
+        start_advertising();
+    }
+
     return OK_ATOM;
 }
 
@@ -410,29 +678,6 @@ static term nif_ble_notify(Context *ctx, int argc, term argv[])
         return ERROR_ATOM;
     }
 
-    return OK_ATOM;
-}
-
-/*
- * ble_nif:add_service/2 - Placeholder (services are currently static)
- *
- * In a future version, this would dynamically build the GATT table
- * from Erlang-side service/characteristic definitions.
- */
-static term nif_ble_add_service(Context *ctx, int argc, term argv[])
-{
-    UNUSED(ctx);
-    UNUSED(argc);
-    UNUSED(argv);
-
-    /* Services are statically defined for now.
-     * Dynamic service registration would require:
-     * 1. Parse the Erlang term tree (UUIDs, flags)
-     * 2. Build ble_gatt_svc_def structs dynamically
-     * 3. Call ble_gatts_add_svcs() before host sync
-     */
-    ESP_LOGI(TAG, "add_service: using static service definition");
-    s_chr_count = 1;  /* We have one characteristic defined statically */
     return OK_ATOM;
 }
 

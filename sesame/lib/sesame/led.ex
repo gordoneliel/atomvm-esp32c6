@@ -1,4 +1,4 @@
-defmodule Led do
+defmodule Sesame.Led do
   @led_pin 15
 
   def start_link do

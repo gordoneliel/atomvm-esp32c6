@@ -1,4 +1,4 @@
-defmodule Radar do
+defmodule Sesame.Radar do
   @rx_pin 2
   @tx_pin 3
   @baud 256_000
@@ -9,6 +9,8 @@ defmodule Radar do
   end
 
   def init do
+    :erlang.register(:radar, self())
+    set_streaming(false)
     # Give sensor time to boot and start transmitting
     :timer.sleep(2000)
     :io.format(~c"[Radar] starting UART0 rx=~p tx=~p baud=~p\n", [@rx_pin, @tx_pin, @baud])
@@ -24,7 +26,25 @@ defmodule Radar do
   end
 
 
+  def streaming?, do: :erlang.get(:streaming) == true
+
+  def set_streaming(enabled) when is_atom(enabled) do
+    :erlang.put(:streaming, enabled)
+  end
+
   defp loop(uart, buf, count) do
+    # Check for streaming toggle messages
+    receive do
+      :start_streaming ->
+        :io.format(~c"[Radar] streaming started\n")
+        set_streaming(true)
+      :stop_streaming ->
+        :io.format(~c"[Radar] streaming stopped\n")
+        set_streaming(false)
+    after
+      0 -> :ok
+    end
+
     result = :uart.read(uart)
 
     # Unwrap {:ok, data} or handle other returns
@@ -39,7 +59,7 @@ defmodule Radar do
       if byte_size(raw) > 0 do
         {process(<<buf::binary, raw::binary>>), count + 1}
       else
-        :timer.sleep(50)
+        :timer.sleep(5)
         {buf, count + 1}
       end
 
@@ -114,19 +134,20 @@ defmodule Radar do
     #   se
     # ])
 
-    # Send to BLE as readable UTF-8 string
-    try do
-      status_label = case status do
-        0x00 -> "N"
-        0x01 -> "M"
-        0x02 -> "S"
-        0x03 -> "B"
-        _ -> "?"
+    if streaming?() do
+      try do
+        status_label = case status do
+          0x00 -> "N"
+          0x01 -> "M"
+          0x02 -> "S"
+          0x03 -> "B"
+          _ -> "?"
+        end
+        msg = :io_lib.format(~c"~s ~p ~p ~p ~p ~p", [status_label, move_dist, me, stat_dist, se, det_dist])
+        Sesame.Ble.notify(:radar_status, :erlang.list_to_binary(msg))
+      catch
+        _, _ -> :ok
       end
-      msg = :io_lib.format(~c"~s ~p ~p ~p ~p ~p", [status_label, move_dist, me, stat_dist, se, det_dist])
-      Ble.notify(:erlang.list_to_binary(msg))
-    catch
-      _, _ -> :ok
     end
   end
 

@@ -1,4 +1,4 @@
-defmodule Heart do
+defmodule Sesame.Heart do
   @delay 30_000
 
   def start_link do
@@ -8,7 +8,7 @@ defmodule Heart do
 
   def init do
     :timer.sleep(@delay)
-    Ota.mark_valid()
+    Sesame.BootEnv.mark_valid()
     :io.format(~c"[Heart] OTA marked valid after ~p ms\n", [@delay])
   end
 end

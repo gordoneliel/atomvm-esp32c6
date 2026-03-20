@@ -1,16 +1,16 @@
-defmodule App do
+defmodule Sesame.Application do
   def start do
     :timer.sleep(8000)
     :io.format(~c"Sesame starting...\n")
 
     child_specs = [
-      {Wifi, {Wifi, :start_link, []}, :permanent, :brutal_kill, :worker, [Wifi]},
-      {Led, {Led, :start_link, []}, :permanent, :brutal_kill, :worker, [Led]},
-      {Dist, {Dist, :start_link, []}, :permanent, :brutal_kill, :worker, [Dist]},
-      {Radar, {Radar, :start_link, []}, :permanent, :brutal_kill, :worker, [Radar]},
-      {Ble, {Ble, :start_link, []}, :permanent, :brutal_kill, :worker, [Ble]},
-      {OtaServer, {OtaServer, :start_link, []}, :permanent, :brutal_kill, :worker, [OtaServer]},
-      {Heart, {Heart, :start_link, []}, :temporary, :brutal_kill, :worker, [Heart]}
+      {Sesame.Wifi, {Sesame.Wifi, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.Wifi]},
+      {Sesame.Led, {Sesame.Led, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.Led]},
+      {Sesame.Cluster, {Sesame.Cluster, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.Cluster]},
+      {Sesame.Radar, {Sesame.Radar, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.Radar]},
+      {Sesame.Ble, {Sesame.Ble, :start_link, []}, :permanent, :brutal_kill, :supervisor, [Sesame.Ble]},
+      {Sesame.OtaServer, {Sesame.OtaServer, :start_link, []}, :permanent, :brutal_kill, :worker, [Sesame.OtaServer]},
+      {Sesame.Heart, {Sesame.Heart, :start_link, []}, :temporary, :brutal_kill, :worker, [Sesame.Heart]}
     ]
 
     case :supervisor.start_link({:local, :sesame_sup}, __MODULE__, child_specs) do
