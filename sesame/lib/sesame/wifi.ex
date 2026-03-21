@@ -1,9 +1,4 @@
 defmodule Sesame.Wifi do
-  @ssid "REDACTED_SSID"
-  @psk "REDACTED_PSK"
-  # @ssid "REDACTED_SSID"
-  # @psk "REDACTED_PSK"
-
   def start_link do
     :gen_server.start_link({:local, :wifi}, __MODULE__, [], [])
   end
@@ -17,7 +12,7 @@ defmodule Sesame.Wifi do
   end
 
   def init([]) do
-    start_network(@ssid, @psk)
+    :io.format(~c"[WiFi] ready, use BLE to connect\n")
     {:ok, %{}}
   end
 
