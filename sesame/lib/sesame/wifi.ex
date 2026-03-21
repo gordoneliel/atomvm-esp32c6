@@ -12,7 +12,8 @@ defmodule Sesame.Wifi do
   end
 
   def init([]) do
-    :io.format(~c"[WiFi] ready, use BLE to connect\n")
+    init_wifi_driver()
+    :io.format(~c"[WiFi] driver started, use BLE to connect\n")
     {:ok, %{}}
   end
 
@@ -22,7 +23,7 @@ defmodule Sesame.Wifi do
   end
 
   def handle_call({:connect, ssid, psk}, _from, state) do
-    :io.format(~c"[WiFi] reconnecting to ~s...\n", [ssid])
+    :io.format(~c"[WiFi] connecting to ~s...\n", [ssid])
     :network.stop()
     :timer.sleep(500)
     result = start_network(ssid, psk)
@@ -35,6 +36,25 @@ defmodule Sesame.Wifi do
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  defp init_wifi_driver do
+    # Start network in STA mode with empty SSID to initialize the WiFi driver
+    # without connecting. This enables wifi_scan_nif:scan/0.
+    config = [
+      sta: [
+        ssid: "",
+        psk: ""
+      ]
+    ]
+
+    case :network.start(config) do
+      {:ok, _pid} ->
+        :io.format(~c"[WiFi] driver initialized\n")
+
+      {:error, reason} ->
+        :io.format(~c"[WiFi] driver init failed: ~p\n", [reason])
+    end
   end
 
   defp start_network(ssid, psk) do
