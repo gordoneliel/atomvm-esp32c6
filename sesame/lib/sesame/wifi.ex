@@ -1,4 +1,8 @@
 defmodule Sesame.Wifi do
+  @nvs_namespace :sesame
+  @nvs_ssid :wifi_ssid
+  @nvs_psk :wifi_psk
+
   def start_link do
     :gen_server.start_link({:local, :wifi}, __MODULE__, [], [])
   end
@@ -12,8 +16,16 @@ defmodule Sesame.Wifi do
   end
 
   def init([]) do
-    init_wifi_driver()
-    :io.format(~c"[WiFi] driver started, use BLE to connect\n")
+    case load_credentials() do
+      {ssid, psk} ->
+        :io.format(~c"[WiFi] saved credentials found for ~s, auto-connecting\n", [ssid])
+        start_network(ssid, psk)
+
+      nil ->
+        init_wifi_driver()
+        :io.format(~c"[WiFi] no saved credentials, use BLE to connect\n")
+    end
+
     {:ok, %{}}
   end
 
@@ -27,6 +39,16 @@ defmodule Sesame.Wifi do
     :network.stop()
     :timer.sleep(500)
     result = start_network(ssid, psk)
+
+    case result do
+      :ok ->
+        save_credentials(ssid, psk)
+        :io.format(~c"[WiFi] credentials saved for ~s\n", [ssid])
+
+      _ ->
+        :ok
+    end
+
     {:reply, result, state}
   end
 
@@ -38,9 +60,32 @@ defmodule Sesame.Wifi do
     {:noreply, state}
   end
 
+  # --- NVS persistence ---
+
+  defp save_credentials(ssid, psk) do
+    :esp.nvs_set_binary(@nvs_namespace, @nvs_ssid, ssid)
+    :esp.nvs_set_binary(@nvs_namespace, @nvs_psk, psk)
+  end
+
+  defp load_credentials do
+    try do
+      case :esp.nvs_get_binary(@nvs_namespace, @nvs_ssid) do
+        ssid when is_binary(ssid) and ssid != <<>> ->
+          psk = :esp.nvs_get_binary(@nvs_namespace, @nvs_psk)
+          psk = if is_binary(psk), do: psk, else: <<>>
+          {ssid, psk}
+
+        _ ->
+          nil
+      end
+    catch
+      _, _ -> nil
+    end
+  end
+
+  # --- Network ---
+
   defp init_wifi_driver do
-    # Start network in STA mode with empty SSID to initialize the WiFi driver
-    # without connecting. This enables wifi_scan_nif:scan/0.
     config = [
       sta: [
         ssid: "",
@@ -84,6 +129,7 @@ defmodule Sesame.Wifi do
         host: "pool.ntp.org",
         synchronized: fn {s, _us} ->
           :io.format(~c"SNTP synchronized: ~p\n", [s])
+          send(:channel_sup, :sntp_synced)
         end
       ]
     ]

@@ -1,17 +1,21 @@
-defmodule Sesame.Websocket do
+defmodule Sesame.Channel.Websocket do
   @moduledoc """
   WebSocket client GenServer wrapping the websocket_nif.
 
   Usage:
-    Sesame.Websocket.start_link("ws://host:port/path")
-    Sesame.Websocket.send_text("hello")
-    Sesame.Websocket.close()
+    Sesame.Channel.Websocket.start_link("ws://host:port/path")
+    Sesame.Channel.Websocket.send_text("hello")
+    Sesame.Channel.Websocket.close()
 
   Events are forwarded to a registered handler process if set.
   """
 
   def start_link(url) do
-    :gen_server.start_link({:local, :websocket}, __MODULE__, url, [])
+    :gen_server.start_link({:local, :websocket}, __MODULE__, {url, []}, [])
+  end
+
+  def start_link(url, opts) do
+    :gen_server.start_link({:local, :websocket}, __MODULE__, {url, opts}, [])
   end
 
   def send_text(data) do
@@ -34,8 +38,17 @@ defmodule Sesame.Websocket do
     :gen_server.cast(:websocket, {:set_handler, pid})
   end
 
-  def init(url) do
-    case :websocket_nif.connect(self(), url) do
+  def init({url, opts}) do
+    headers = Keyword.get(opts, :headers, nil)
+
+    result =
+      if headers do
+        :websocket_nif.connect(self(), url, headers)
+      else
+        :websocket_nif.connect(self(), url)
+      end
+
+    case result do
       :ok ->
         :io.format(~c"[WS] connecting to ~s\n", [url])
         {:ok, %{url: url, connected: false, handler: nil}}

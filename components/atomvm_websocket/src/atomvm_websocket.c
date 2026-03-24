@@ -5,6 +5,7 @@
  *
  * NIFs:
  *   websocket_nif:connect/2    - Connect to a WebSocket server (pid, url)
+ *   websocket_nif:connect/3    - Connect with custom HTTP headers (pid, url, headers)
  *   websocket_nif:send_text/1  - Send a text frame
  *   websocket_nif:send_binary/1 - Send a binary frame
  *   websocket_nif:close/0      - Close the connection
@@ -35,6 +36,7 @@
 
 /* ESP-IDF headers */
 #include <esp_log.h>
+#include <esp_crt_bundle.h>
 #include <esp_websocket_client.h>
 
 #define TAG "atomvm_ws"
@@ -47,6 +49,7 @@ static GlobalContext *s_global = NULL;
 static int32_t s_owner_pid = -1;
 static esp_websocket_client_handle_t s_ws_client = NULL;
 static bool s_connected = false;
+static char *s_headers = NULL;
 
 /* ---------------------------------------------------------------------------
  * Helper: send event to owner Erlang process from ESP-IDF task
@@ -136,15 +139,12 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
  * =========================================================================== */
 
 /*
- * websocket_nif:connect/2 - Connect to a WebSocket server
+ * Internal: shared connect logic
  *
- * Args: pid (self()), url (binary, e.g. "ws://host:port/path")
- * Returns: :ok | {:error, reason}
+ * pid, url are required. headers_bin may be term_invalid() to skip.
  */
-static term nif_ws_connect(Context *ctx, int argc, term argv[])
+static term ws_connect_internal(Context *ctx, term pid, term url_term, term headers_term)
 {
-    UNUSED(argc);
-
     /* If already connected, close first */
     if (s_ws_client != NULL) {
         esp_websocket_client_close(s_ws_client, portMAX_DELAY);
@@ -153,12 +153,18 @@ static term nif_ws_connect(Context *ctx, int argc, term argv[])
         s_connected = false;
     }
 
+    /* Free old headers */
+    if (s_headers != NULL) {
+        free(s_headers);
+        s_headers = NULL;
+    }
+
     /* Store owner */
     s_global = ctx->global;
-    s_owner_pid = term_to_local_process_id(argv[0]);
+    s_owner_pid = term_to_local_process_id(pid);
 
     /* Extract URL */
-    if (!term_is_binary(argv[1])) {
+    if (!term_is_binary(url_term)) {
         term t = term_alloc_tuple(2, &ctx->heap);
         term_put_tuple_element(t, 0, ERROR_ATOM);
         term_put_tuple_element(t, 1,
@@ -166,20 +172,33 @@ static term nif_ws_connect(Context *ctx, int argc, term argv[])
         return t;
     }
 
-    int url_len = term_binary_size(argv[1]);
+    int url_len = term_binary_size(url_term);
     char *url = malloc(url_len + 1);
     if (!url) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    memcpy(url, term_binary_data(argv[1]), url_len);
+    memcpy(url, term_binary_data(url_term), url_len);
     url[url_len] = '\0';
+
+    /* Extract headers if provided */
+    if (term_is_binary(headers_term) && term_binary_size(headers_term) > 0) {
+        int hdr_len = term_binary_size(headers_term);
+        s_headers = malloc(hdr_len + 1);
+        if (s_headers) {
+            memcpy(s_headers, term_binary_data(headers_term), hdr_len);
+            s_headers[hdr_len] = '\0';
+            ESP_LOGI(TAG, "Using custom headers (%d bytes)", hdr_len);
+        }
+    }
 
     ESP_LOGI(TAG, "Connecting to %s", url);
 
     esp_websocket_client_config_t config = {
         .uri = url,
         .task_stack = 4096,
-        .buffer_size = 1024,
+        .buffer_size = 2048,
+        .headers = s_headers,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
 
     s_ws_client = esp_websocket_client_init(&config);
@@ -210,6 +229,30 @@ static term nif_ws_connect(Context *ctx, int argc, term argv[])
     }
 
     return OK_ATOM;
+}
+
+/*
+ * websocket_nif:connect/2 - Connect to a WebSocket server
+ *
+ * Args: pid (self()), url (binary)
+ * Returns: :ok | {:error, reason}
+ */
+static term nif_ws_connect(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return ws_connect_internal(ctx, argv[0], argv[1], term_invalid_term());
+}
+
+/*
+ * websocket_nif:connect/3 - Connect with custom HTTP headers
+ *
+ * Args: pid (self()), url (binary), headers (binary, "Name: Value\r\n..." format)
+ * Returns: :ok | {:error, reason}
+ */
+static term nif_ws_connect_opts(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    return ws_connect_internal(ctx, argv[0], argv[1], argv[2]);
 }
 
 /*
@@ -336,6 +379,11 @@ static const struct Nif ws_connect_nif = {
     .nif_ptr = nif_ws_connect
 };
 
+static const struct Nif ws_connect_opts_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ws_connect_opts
+};
+
 static const struct Nif ws_send_text_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ws_send_text
@@ -366,6 +414,9 @@ const struct Nif *atomvm_websocket_nif_get_nif(const char *nifname)
 {
     if (strcmp("websocket_nif:connect/2", nifname) == 0) {
         return &ws_connect_nif;
+    }
+    if (strcmp("websocket_nif:connect/3", nifname) == 0) {
+        return &ws_connect_opts_nif;
     }
     if (strcmp("websocket_nif:send_text/1", nifname) == 0) {
         return &ws_send_text_nif;
