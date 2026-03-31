@@ -28,7 +28,10 @@ defmodule Sesame.Hub.HealthProvider do
       end
 
     # Track CPU samples in process dictionary for load averages
-    samples = :erlang.get(:cpu_samples) || []
+    samples = case :erlang.get(:cpu_samples) do
+      :undefined -> []
+      list -> list
+    end
     samples = :lists.sublist([cpu_pct | samples], @max_samples)
     :erlang.put(:cpu_samples, samples)
 
