@@ -1,5 +1,6 @@
 defmodule Sesame.Led do
-  @led_pin 15
+  # XIAO ESP32-C5: GPIO 27, XIAO ESP32-C6: GPIO 15
+  @led_pin 27
 
   def start_link do
     pid = spawn_link(__MODULE__, :init, [])

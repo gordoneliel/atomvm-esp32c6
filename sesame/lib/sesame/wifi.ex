@@ -8,7 +8,7 @@ defmodule Sesame.Wifi do
   end
 
   def scan do
-    :gen_server.call(:wifi, :scan, 15_000)
+    :gen_server.call(:wifi, :scan, 60_000)
   end
 
   def connect(ssid, psk) do
@@ -116,6 +116,7 @@ defmodule Sesame.Wifi do
         end,
         got_ip: fn {addr, _, _} ->
           :io.format(~c"Got IP: ~p\n", [addr])
+          send(:ble, :shutdown)
         end,
         disconnected: fn ->
           :io.format(~c"WiFi disconnected\n")
@@ -129,7 +130,7 @@ defmodule Sesame.Wifi do
         host: "pool.ntp.org",
         synchronized: fn {s, _us} ->
           :io.format(~c"SNTP synchronized: ~p\n", [s])
-          send(:channel_sup, :sntp_synced)
+          send(:hub_sup, :sntp_synced)
         end
       ]
     ]

@@ -31,7 +31,7 @@ defmodule Sesame.MixProject do
       flash_offset: 0x210000,
       chip: "esp32c6",
       port: "/dev/cu.usbmodem101",
-      baud: 921600
+      baud: 921_600
     ]
   end
 end

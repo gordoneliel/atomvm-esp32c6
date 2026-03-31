@@ -59,6 +59,7 @@ static int32_t s_owner_pid = -1;          /* Erlang PID that called init/1 */
 static uint16_t s_conn_handle = 0;
 static bool s_connected = false;
 static bool s_host_started = false;
+static bool s_deinitialized = false;
 
 static char s_device_name[32] = "atomvm";
 
@@ -248,7 +249,7 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
                 .itvl_min = 24,             /* 30ms  (24 * 1.25ms) */
                 .itvl_max = 40,             /* 50ms  (40 * 1.25ms) */
                 .latency = 0,
-                .supervision_timeout = 300  /* 3000ms (300 * 10ms) */
+                .supervision_timeout = 600  /* 6000ms (600 * 10ms) */
             };
             ble_gap_update_params(s_conn_handle, &conn_params);
         } else {
@@ -319,6 +320,7 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
 
 static void start_advertising(void)
 {
+    if (s_deinitialized) return;
     struct ble_hs_adv_fields fields = { 0 };
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.name = (uint8_t *)s_device_name;
@@ -430,17 +432,18 @@ static term nif_ble_init(Context *ctx, int argc, term argv[])
         return error_tuple;
     }
 
-    /* Set device name for GAP */
-    ble_svc_gap_device_name_set(s_device_name);
-
     /* Initialize GAP and GATT core services */
     ble_svc_gap_init();
     ble_svc_gatt_init();
+
+    /* Set device name for GAP (must be after ble_svc_gap_init) */
+    ble_svc_gap_device_name_set(s_device_name);
 
     /* Reset dynamic service state */
     s_svc_count = 0;
     s_chr_count = 0;
     s_host_started = false;
+    s_deinitialized = false;
 
     ESP_LOGI(TAG, "BLE initialized (call add_service then advertise)");
     return OK_ATOM;
@@ -621,6 +624,11 @@ static term nif_ble_advertise(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
+    if (s_deinitialized) {
+        ESP_LOGW(TAG, "BLE deinitialized, ignoring advertise");
+        return OK_ATOM;
+    }
+
     if (!s_host_started) {
         /* Set sync callback and preferred MTU before starting host */
         ble_hs_cfg.sync_cb = ble_on_sync;
@@ -630,6 +638,34 @@ static term nif_ble_advertise(Context *ctx, int argc, term argv[])
         ESP_LOGI(TAG, "Host task started (preferred MTU=512), will advertise on sync");
     } else {
         start_advertising();
+    }
+
+    return OK_ATOM;
+}
+
+/*
+ * ble_nif:deinit/0 - Stop BLE and free resources
+ */
+static term nif_ble_deinit(Context *ctx, int argc, term argv[])
+{
+    UNUSED(ctx);
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (s_host_started) {
+        ESP_LOGI(TAG, "Stopping BLE to free RAM");
+        int rc = nimble_port_stop();
+        if (rc == 0) {
+            nimble_port_deinit();
+            s_host_started = false;
+            s_connected = false;
+            s_deinitialized = true;
+            s_svc_count = 0;
+            s_chr_count = 0;
+            ESP_LOGI(TAG, "BLE deinitialized");
+        } else {
+            ESP_LOGE(TAG, "nimble_port_stop failed: %d", rc);
+        }
     }
 
     return OK_ATOM;
@@ -695,6 +731,11 @@ static const struct Nif ble_advertise_nif = {
     .nif_ptr = nif_ble_advertise
 };
 
+static const struct Nif ble_deinit_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_ble_deinit
+};
+
 static const struct Nif ble_notify_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_ble_notify
@@ -721,6 +762,9 @@ const struct Nif *atomvm_ble_nif_get_nif(const char *nifname)
     }
     if (strcmp("ble_nif:notify/3", nifname) == 0) {
         return &ble_notify_nif;
+    }
+    if (strcmp("ble_nif:deinit/0", nifname) == 0) {
+        return &ble_deinit_nif;
     }
     if (strcmp("ble_nif:add_service/2", nifname) == 0) {
         return &ble_add_service_nif;

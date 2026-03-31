@@ -59,10 +59,10 @@ defmodule Sesame.Radar do
       if byte_size(raw) > 0 do
         {process(<<buf::binary, raw::binary>>), count + 1}
       else
-        :timer.sleep(5)
         {buf, count + 1}
       end
 
+    :timer.sleep(50)
     loop(uart, new_buf, new_count)
   end
 
