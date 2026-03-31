@@ -20,7 +20,8 @@ defmodule Sesame.MixProject do
 
   defp deps do
     [
-      {:exatomvm, github: "atomvm/ExAtomVM", runtime: false}
+      {:exatomvm, github: "atomvm/ExAtomVM", runtime: false},
+      {:nerves_hub_link_avm, path: "../../nerves_hub_link_avm"}
     ]
   end
 
