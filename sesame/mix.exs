@@ -4,7 +4,7 @@ defmodule Sesame.MixProject do
   def project do
     [
       app: :sesame,
-      version: "0.1.0",
+      version: "0.1.12",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),

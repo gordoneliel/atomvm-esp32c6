@@ -6,13 +6,14 @@ config :sesame, :nerveshub,
     System.get_env("NERVES_HUB_KEY") || raise("NERVES_HUB_KEY not set — source .envrc"),
   product_secret:
     System.get_env("NERVES_HUB_SECRET") || raise("NERVES_HUB_SECRET not set — source .envrc"),
-  port: 443,
+  port: String.to_integer(System.get_env("NERVES_HUB_PORT") || "443"),
+  ssl: System.get_env("NERVES_HUB_SSL") != "false",
   identifier: "SESAME-00000001",
   firmware_meta: %{
-    "uuid" => "b4903e05-4dd6-4cb0-a076-15e6dae476cf",
+    "uuid" => "ca59866b-163e-45f2-a0b3-67bb12f8d28a",
     "product" => "WorkplaceOS",
     "architecture" => "riscv32",
-    "version" => "0.0.0-alpha-0",
+    "version" => Mix.Project.config()[:version],
     "platform" => "Sesame"
   },
   fwup_writer: Sesame.Hub.FwupWriter,

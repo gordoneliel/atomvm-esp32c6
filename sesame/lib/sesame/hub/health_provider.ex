@@ -68,7 +68,8 @@ defmodule Sesame.Hub.HealthProvider do
 
   defp avg([]), do: 0.0
   defp avg(list) do
-    :lists.sum(list) / :erlang.length(list)
+    sum = :lists.foldl(fn x, acc -> x + acc end, 0, list)
+    sum / :erlang.length(list)
   end
 
   defp safe_system_info(key, default) do

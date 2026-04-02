@@ -19,7 +19,9 @@ defmodule Sesame.Wifi do
     case load_credentials() do
       {ssid, psk} ->
         :io.format(~c"[WiFi] saved credentials found for ~s, auto-connecting\n", [ssid])
-        start_network(ssid, psk)
+        # Schedule BLE shutdown — C5 coex can't handle WiFi auth + BLE
+        :erlang.send_after(3000, self(), {:shutdown_ble_and_connect, ssid, psk})
+        init_wifi_driver()
 
       nil ->
         init_wifi_driver()
@@ -53,6 +55,25 @@ defmodule Sesame.Wifi do
   end
 
   def handle_cast(_msg, state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:shutdown_ble_and_connect, ssid, psk}, state) do
+    :io.format(~c"[WiFi] shutting down BLE for coex, then connecting...\n")
+    try do
+      send(:ble, :shutdown)
+    catch
+      _, _ -> :ok
+    end
+    :timer.sleep(1000)
+    # Stop the idle WiFi driver before starting with credentials
+    try do
+      :network.stop()
+      :timer.sleep(500)
+    catch
+      _, _ -> :ok
+    end
+    start_network(ssid, psk)
     {:noreply, state}
   end
 

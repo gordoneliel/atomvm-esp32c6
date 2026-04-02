@@ -206,7 +206,7 @@ async function connect() {
     log('Scanning for BLE devices...');
 
     device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: 'sesame' }],
+      filters: [{ name: 'sesame' }, { name: 'nimble' }],
       optionalServices: [RADAR_SERVICE, NETWORK_SERVICE]
     });
 

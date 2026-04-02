@@ -6,7 +6,7 @@
 
 /**
  * Get the inactive partition name based on NVS "active" value.
- * Returns "avm_a" if active is 1 (b), "avm_b" if active is 0 (a).
+ * Returns "main_a" if active is 1 (b), "main_b" if active is 0 (a).
  */
 const char *get_inactive_part_name(void);
 

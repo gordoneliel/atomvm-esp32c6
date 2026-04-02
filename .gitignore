@@ -6,3 +6,7 @@
 
 # Secrets
 .envrc
+
+# Firmware capsules
+*.cap
+extracted/

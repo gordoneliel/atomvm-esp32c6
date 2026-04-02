@@ -69,16 +69,27 @@ defmodule Sesame.Ble.Gatt.NetworkService do
 
         case Sesame.Wifi.connect(ssid, psk) do
           :ok ->
-            Sesame.Ble.notify(:network_result, <<"{\"status\":\"connected\",\"ssid\":\"", ssid::binary, "\"}">>)
+            Sesame.Ble.notify(
+              :network_result,
+              <<"{\"status\":\"connected\",\"ssid\":\"", ssid::binary, "\"}">>
+            )
 
           {:error, reason} ->
-            msg = :erlang.iolist_to_binary(:io_lib.format(~c"{\"status\":\"error\",\"reason\":\"~p\"}", [reason]))
+            msg =
+              :erlang.iolist_to_binary(
+                :io_lib.format(~c"{\"status\":\"error\",\"reason\":\"~p\"}", [reason])
+              )
+
             Sesame.Ble.notify(:network_result, msg)
         end
 
       _ ->
         :io.format(~c"[NetworkService] invalid connect format, expected connect:SSID:PSK\n")
-        Sesame.Ble.notify(:network_result, <<"{\"status\":\"error\",\"reason\":\"invalid format\"}">>)
+
+        Sesame.Ble.notify(
+          :network_result,
+          <<"{\"status\":\"error\",\"reason\":\"invalid format\"}">>
+        )
     end
 
     {:noreply, state}

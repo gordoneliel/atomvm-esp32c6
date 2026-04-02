@@ -64,6 +64,9 @@ static term nif_wifi_scan(Context *ctx, int argc, term argv[])
 
     GlobalContext *glb = ctx->global;
 
+    /* Disconnect if currently connecting/connected, so scan can proceed */
+    esp_wifi_disconnect();
+
     /* Perform blocking scan */
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
