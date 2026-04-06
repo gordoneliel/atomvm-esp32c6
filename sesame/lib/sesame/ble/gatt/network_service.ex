@@ -129,12 +129,12 @@ defmodule Sesame.Ble.Gatt.NetworkService do
   defp format_scan_results(networks) do
     networks
     |> Enum.map(fn net ->
-      [
-        {:ssid, :proplists.get_value(:ssid, net, <<"?">>)},
-        {:rssi, :proplists.get_value(:rssi, net, 0)}
-      ]
+      %{
+        "ssid" => :proplists.get_value(:ssid, net, <<"?">>),
+        "rssi" => :proplists.get_value(:rssi, net, 0)
+      }
     end)
-    |> :json_encoder.encode()
+    |> JSON.encode!()
     |> :erlang.iolist_to_binary()
   end
 end

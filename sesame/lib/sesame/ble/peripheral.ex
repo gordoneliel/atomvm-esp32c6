@@ -44,7 +44,6 @@ defmodule Sesame.Ble.Peripheral do
 
   def handle_info({:ble_disconnected, _reason}, state) do
     :io.format(~c"[BLE] client disconnected, re-advertising\n")
-    :gen_server.cast(:radar_service, :stop_streaming)
     :ble_nif.advertise()
     {:noreply, %{state | conn_handle: nil, subscribed: []}}
   end

@@ -11,7 +11,7 @@ defmodule Sesame.Ble do
     - handle_cast({:ble_write, char_id, data}, state)
   """
 
-  @handlers [Sesame.Ble.Gatt.RadarService, Sesame.Ble.Gatt.NetworkService]
+  @handlers [Sesame.Ble.Gatt.NetworkService]
 
   def start_link do
     child_specs =

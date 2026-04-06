@@ -23,10 +23,9 @@ The `sesame/` directory contains the Elixir application:
 |--------|------|
 | `Wifi` | WiFi driver, BLE-based provisioning, NVS credential persistence, auto-connect on reboot |
 | `Led` | Status LED (blinks during WiFi connect, solid when connected) |
-| `Radar` | Reads mmWave radar sensor over UART (256000 baud) |
-| `Ble` | BLE GATT server with network provisioning and radar streaming services |
+| `Ble` | BLE GATT server with network provisioning service |
 | `Heart` | Marks the current OTA slot as valid after 30s of stable boot |
-| `Hub.Supervisor` | Waits for SNTP sync, starts NervesHub, loads firmware metadata from NVS |
+| `Hub.Supervisor` | Starts NervesHub and logger_manager, loads firmware metadata from NVS |
 | `Hub.FwupWriter` | Capsule (.cap) parser — streams entries to partitions with SHA256 verification |
 | `Hub.Client` | NervesHub lifecycle callbacks (reboot, identify, connect/disconnect) |
 | `Hub.HealthProvider` | Reports memory, CPU, and process metrics to NervesHub |
@@ -52,7 +51,6 @@ atomvm-esp32c6/
 │   │       ├── ble/              # BLE GATT services
 │   │       ├── wifi.ex           # WiFi management
 │   │       ├── led.ex            # Status LED
-│   │       ├── radar.ex          # mmWave sensor
 │   │       └── heart.ex          # OTA boot validation
 │   ├── mix.exs
 │   └── .envrc                    # NervesHub credentials (not committed)
@@ -66,7 +64,6 @@ atomvm-esp32c6/
 
 - **Board**: Seeed Studio XIAO ESP32-C5 (384KB SRAM, 8MB PSRAM, 8MB flash, WiFi 6, BLE 5, dual-band)
 - **Also supports**: XIAO ESP32-C6 (4MB flash, WiFi 6, BLE 5)
-- **Radar**: mmWave presence sensor on UART (GPIO2 RX, GPIO3 TX)
 - **LED**: GPIO27 (C5) / GPIO15 (C6)
 - **Antenna**: External antenna required on C5 (u.FL connector)
 

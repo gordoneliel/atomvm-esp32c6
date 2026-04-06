@@ -7,14 +7,12 @@ defmodule Sesame.Application do
        [Sesame.Wifi]},
       {Sesame.Led, {Sesame.Led, :start_link, []}, :permanent, :brutal_kill, :worker,
        [Sesame.Led]},
-      {Sesame.Radar, {Sesame.Radar, :start_link, []}, :permanent, :brutal_kill, :worker,
-       [Sesame.Radar]},
       {Sesame.Ble, {Sesame.Ble, :start_link, []}, :permanent, :brutal_kill, :supervisor,
        [Sesame.Ble]},
       {Sesame.Heart, {Sesame.Heart, :start_link, []}, :temporary, :brutal_kill, :worker,
        [Sesame.Heart]},
       {Sesame.Hub.Supervisor, {Sesame.Hub.Supervisor, :start_link, []}, :permanent, :brutal_kill,
-       :worker, [Sesame.Hub.Supervisor]}
+       :supervisor, [Sesame.Hub.Supervisor]}
     ]
 
     case :supervisor.start_link({:local, :sesame_sup}, __MODULE__, child_specs) do

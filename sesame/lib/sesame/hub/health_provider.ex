@@ -43,18 +43,18 @@ defmodule Sesame.Hub.HealthProvider do
     )
 
     %{
-      "mem_size_mb" => @total_kb / 1024,
-      "mem_used_mb" => used_kb / 1024,
+      "mem_size_mb" => div(@total_kb, 1024),
+      "mem_used_mb" => div(used_kb, 1024),
       "mem_used_percent" => used_pct,
       "cpu_usage_percent" => cpu_pct,
-      "load_1min" => load_1m,
-      "load_5min" => load_5m,
-      "load_15min" => load_15m,
+      "load_1min" => trunc(load_1m),
+      "load_5min" => trunc(load_5m),
+      "load_15min" => trunc(load_15m),
       "mem_total_kb" => @total_kb,
       "mem_used_kb" => used_kb,
-      "free_heap_kb" => free_heap / 1024,
-      "min_free_heap_kb" => min_free / 1024,
-      "largest_free_block_kb" => largest_block / 1024,
+      "free_heap_kb" => div(free_heap, 1024),
+      "min_free_heap_kb" => div(min_free, 1024),
+      "largest_free_block_kb" => div(largest_block, 1024),
       "process_count" => proc_count
     }
   end

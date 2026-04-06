@@ -10,7 +10,7 @@ config :sesame, :nerveshub,
   ssl: System.get_env("NERVES_HUB_SSL") != "false",
   identifier: "SESAME-00000001",
   firmware_meta: %{
-    "uuid" => "ca59866b-163e-45f2-a0b3-67bb12f8d28a",
+    "uuid" => "5583c2e3-feed-41c4-9ead-a4c80fc1619a",
     "product" => "WorkplaceOS",
     "architecture" => "riscv32",
     "version" => Mix.Project.config()[:version],
@@ -18,4 +18,4 @@ config :sesame, :nerveshub,
   },
   fwup_writer: Sesame.Hub.FwupWriter,
   client: Sesame.Hub.Client,
-  extensions: [health: Sesame.Hub.HealthProvider]
+  extensions: [health: Sesame.Hub.HealthProvider, logging: true]
