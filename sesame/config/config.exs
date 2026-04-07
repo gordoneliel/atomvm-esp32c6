@@ -16,6 +16,6 @@ config :sesame, :nerveshub,
     "version" => Mix.Project.config()[:version],
     "platform" => "Sesame"
   },
-  fwup_writer: Sesame.Hub.FwupWriter,
+  firmware_writer: Sesame.Hub.FwupWriter,
   client: Sesame.Hub.Client,
   extensions: [health: Sesame.Hub.HealthProvider, logging: true]

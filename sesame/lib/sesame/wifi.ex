@@ -77,6 +77,27 @@ defmodule Sesame.Wifi do
     {:noreply, state}
   end
 
+  def handle_info(:reconnect, state) do
+    :io.format(~c"[WiFi] reconnecting...\n")
+    :timer.sleep(2000)
+
+    case load_credentials() do
+      {ssid, psk} ->
+        try do
+          :network.stop()
+          :timer.sleep(500)
+        catch
+          _, _ -> :ok
+        end
+        start_network(ssid, psk)
+
+      nil ->
+        :io.format(~c"[WiFi] no saved credentials, cannot reconnect\n")
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -140,8 +161,9 @@ defmodule Sesame.Wifi do
           send(:ble, :shutdown)
         end,
         disconnected: fn ->
-          :io.format(~c"WiFi disconnected\n")
+          :io.format(~c"WiFi disconnected, will reconnect...\n")
           send(:led, :wifi_disconnected)
+          send(:wifi, :reconnect)
         end
       ],
       mdns: [
