@@ -3,12 +3,21 @@ defmodule Firefly.Lights.Server do
   Runs the current animation on the LED matrix: asks it for each frame, draws
   the frame and schedules the next one. Use the `Firefly.Lights` API rather
   than calling this process directly.
+
+  Switching animations dips through black: the matrix fades out, then the
+  new animation fades in. Turning the power off fades out and stays dark.
+  Fading only changes the brightness frames are drawn at, so it costs no more
+  than drawing them.
   """
 
   alias Firefly.Lights
-  alias Firefly.Lights.{Color, Frame, Strip}
+  alias Firefly.Lights.Strip
 
   @default_brightness 64
+
+  # Fading out or in takes @fade_steps steps of @fade_interval ms
+  @fade_steps 6
+  @fade_interval 25
 
   def start_link(name) do
     :gen_server.start_link({:local, :lights}, __MODULE__, name, [])
@@ -20,7 +29,17 @@ defmodule Firefly.Lights.Server do
     case Strip.init() do
       :ok ->
         :io.format(~c"[Lights] matrix ready\n")
-        state = %{brightness: @default_brightness, power: true, color: nil, frame: nil}
+        # `frame` is the frame on the matrix, drawn at `level` (0..@fade_steps)
+        # of the brightness. `fade` is :out, :in or nil.
+        state = %{
+          brightness: @default_brightness,
+          power: true,
+          color: nil,
+          frame: nil,
+          level: 0,
+          fade: nil
+        }
+
         {:ok, start_named(state, name)}
 
       {:error, reason} ->
@@ -51,7 +70,7 @@ defmodule Firefly.Lights.Server do
 
   def handle_cast({:brightness, level}, state) do
     state = %{state | brightness: min(255, max(0, level))}
-    if state.power and state.frame, do: Strip.show(state.frame, state.brightness)
+    state = if state.power and state.frame, do: draw(state, state.frame), else: state
     {:noreply, state}
   end
 
@@ -67,6 +86,24 @@ defmodule Firefly.Lights.Server do
   # already queued when a new animation starts is dropped
   def handle_info({:tick, ref}, %{tick: ref} = state) do
     {:noreply, render(state)}
+  end
+
+  def handle_info({:fade, ref}, %{tick: ref, fade: :out} = state) do
+    state = draw(%{state | level: state.level - 1}, state.frame)
+
+    cond do
+      state.level > 0 -> {:noreply, fade(state, :out)}
+      state.power -> {:noreply, state |> fade(:in) |> render()}
+      true -> {:noreply, %{state | fade: nil}}
+    end
+  end
+
+  def handle_info({:fade, ref}, %{tick: ref, fade: :in} = state) do
+    state = draw(%{state | level: state.level + 1}, state.frame)
+
+    if state.level < @fade_steps,
+      do: {:noreply, fade(state, :in)},
+      else: {:noreply, %{state | fade: nil}}
   end
 
   def handle_info(_msg, state) do
@@ -92,24 +129,36 @@ defmodule Firefly.Lights.Server do
       |> Map.put(:animation, {module, module.init(animation_opts)})
       |> Map.put(:tick, :erlang.make_ref())
 
-    if state.power, do: render(state), else: blank(state)
+    # Fade out whatever is showing (mid-fade, from its current level), then
+    # the new animation starts as it fades in
+    cond do
+      state.level > 0 -> fade(state, :out)
+      state.power -> state |> fade(:in) |> render()
+      true -> %{state | fade: nil}
+    end
   end
 
   # Starts the current animation again, e.g. after power or color changes
   defp restart(%{playing: {module, opts}} = state), do: start(state, state.name, module, opts)
 
-  defp blank(state) do
-    Strip.show(Frame.fill(Color.black()), 0)
-    state
-  end
-
+  # Moves the animation on a frame and schedules the next one
   defp render(%{animation: {module, anim_state}} = state) do
     {frame, delay, anim_state} = module.next_frame(anim_state)
-    Strip.show(frame, state.brightness)
-    schedule(delay, state.tick)
-    %{state | animation: {module, anim_state}, frame: frame}
+    schedule(delay, {:tick, state.tick})
+    draw(%{state | animation: {module, anim_state}}, frame)
   end
 
-  defp schedule(:infinity, _ref), do: :ok
-  defp schedule(delay, ref), do: :erlang.send_after(delay, self(), {:tick, ref})
+  # Schedules the next step of fading `direction` (:out or :in)
+  defp fade(state, direction) do
+    schedule(@fade_interval, {:fade, state.tick})
+    %{state | fade: direction}
+  end
+
+  defp draw(state, frame) do
+    Strip.show(frame, div(state.brightness * state.level, @fade_steps))
+    %{state | frame: frame}
+  end
+
+  defp schedule(:infinity, _msg), do: :ok
+  defp schedule(delay, msg), do: :erlang.send_after(delay, self(), msg)
 end

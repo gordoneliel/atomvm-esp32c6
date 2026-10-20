@@ -9,8 +9,8 @@ defmodule Firefly.Matter do
 
   def start_link do
     child_specs = [
-      {Firefly.Matter.Device, {Firefly.Matter.Device, :start_link, []},
-       :permanent, :brutal_kill, :worker, [Firefly.Matter.Device]}
+      {Firefly.Matter.Device, {Firefly.Matter.Device, :start_link, []}, :permanent, :brutal_kill,
+       :worker, [Firefly.Matter.Device]}
     ]
 
     :supervisor.start_link({:local, :matter_sup}, __MODULE__, child_specs)

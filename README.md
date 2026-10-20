@@ -120,15 +120,15 @@ To clear all Matter and Thread credentials and re-commission:
 
 ```bash
 # Erase NVS partition (requires USB)
-esptool.py --chip esp32c6 -p /dev/cu.usbmodem1101 erase_region 0x9000 0x6000
+esptool.py --chip esp32c6 -p /dev/cu.usbmodem1101 erase_region 0x9000 0xC000
 ```
 
 ### Partition layout (4MB flash)
 
 | Partition | Offset | Size |
 |-----------|--------|------|
-| nvs | 0x9000 | 24KB |
-| phy_init | 0xF000 | 4KB |
-| factory | 0x10000 | 3.3MB |
+| nvs | 0x9000 | 48KB |
+| phy_init | 0x15000 | 4KB |
+| factory | 0x20000 | 3.25MB |
 | boot.avm | 0x360000 | 512KB (AtomVM Erlang/Elixir libraries) |
 | main.avm | 0x3E0000 | 128KB (Firefly app) |

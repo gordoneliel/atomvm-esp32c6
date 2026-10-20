@@ -28,12 +28,13 @@ defmodule Firefly.Lights.Animations.Ripple do
   end
 
   @impl true
-  def next_frame(state) do
+  def next_frame(%{color: color, phase: phase, spacing: spacing, width: width} = state) do
+    # Fields are read once up front: map lookups per LED are slow on AtomVM
     pixels =
       for {row, col, distance} <- state.distances,
-          level = level(distance, state),
+          level = level(distance, phase, spacing, width),
           level > 0,
-          do: {row, col, Color.scale(state.color, level, state.width)}
+          do: {row, col, Color.scale(color, level, width)}
 
     phase = rem(state.phase + state.speed, state.spacing)
     {Frame.pixels(pixels), state.interval, %{state | phase: phase}}
@@ -42,7 +43,7 @@ defmodule Firefly.Lights.Animations.Ripple do
   # Brightness (0..width) of an LED at `distance`: full on a ring's crest,
   # fading to nothing `width` away from it. Crests sit at `phase` plus
   # multiples of `spacing`, so they move outward as the phase grows.
-  defp level(distance, %{phase: phase, spacing: spacing, width: width}) do
+  defp level(distance, phase, spacing, width) do
     offset = rem(rem(distance - phase, spacing) + spacing, spacing)
     from_crest = min(offset, spacing - offset)
     max(0, width - from_crest)
@@ -53,7 +54,7 @@ defmodule Firefly.Lights.Animations.Ripple do
     center_row = (Matrix.rows() - 1) / 2
     center_col = (Matrix.cols() - 1) / 2
 
-    for row <- 0..(Matrix.rows() - 1), col <- 0..(Matrix.cols() - 1) do
+    for row <- Matrix.row_indices(), col <- Matrix.col_indices() do
       dr = row - center_row
       dc = col - center_col
       {row, col, round(:math.sqrt(dr * dr + dc * dc) * 10)}

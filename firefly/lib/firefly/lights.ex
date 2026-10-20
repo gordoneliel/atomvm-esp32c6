@@ -14,7 +14,18 @@ defmodule Firefly.Lights do
   Colors are `{r, g, b}` tuples (`0..255`), drawn at the matrix brightness.
   """
 
-  alias Firefly.Lights.Animations.{Blink, Chevron, Pulse, Ripple, Scan, Solid}
+  alias Firefly.Lights.Animations.{
+    Blink,
+    Chevron,
+    Larson,
+    Life,
+    Plasma,
+    Pulse,
+    Rain,
+    Ripple,
+    Scan,
+    Solid
+  }
 
   @animations %{
     idle: {Chevron, [direction: :right]},
@@ -23,11 +34,25 @@ defmodule Firefly.Lights do
     commissioning: {Scan, [color: {0, 0, 40}]},
     connected: {Pulse, [color: {0, 20, 0}]},
     error: {Blink, [color: {30, 0, 0}]},
-    ripple: {Ripple, []}
+    ripple: {Ripple, []},
+    scanner: {Larson, []},
+    plasma: {Plasma, []},
+    rain: {Rain, []},
+    life: {Life, []}
   }
 
-  # Order of the named animations for `cycle/0` (arrow_right is the same as idle)
-  @cycle [:idle, :commissioning, :connected, :error, :arrow_left, :ripple]
+  # Order of the named animations for `cycle/0`: all but the still-looking
+  # connected and error states (arrow_right is the same as idle)
+  @cycle [
+    :idle,
+    :commissioning,
+    :arrow_left,
+    :ripple,
+    :scanner,
+    :plasma,
+    :rain,
+    :life
+  ]
 
   @doc "Names accepted by `play/1`."
   def animations, do: Map.keys(@animations)

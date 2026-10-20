@@ -19,9 +19,13 @@ defmodule Firefly.Matter.Device do
       (see `Firefly.Matter.LightControl`)
     - 3: "Next animation" switch: turning it on plays the next animation,
       then it turns itself back off
+
+  Until the device is commissioned, the LED matrix scrolls its manual pairing
+  code.
   """
 
   alias Firefly.Lights
+  alias Firefly.Lights.Animations.Text
   alias Firefly.Matter.LightControl
 
   # Matter device identity (test VID/PID — replace with certified IDs)
@@ -29,9 +33,13 @@ defmodule Firefly.Matter.Device do
   @vendor_name "Firefly"
   @product_id 0x8001
   @product_name "Firefly Sensor"
-  @node_label "Firefly Sensor"
   @hardware_version 1
   @software_version 1
+
+  # The radio's antenna, see :matter_nif.set_antenna/1: Seeed's 2.4 GHz
+  # antenna on the XIAO's U.FL connector. (The built-in ceramic antenna,
+  # :internal, hears next to no Thread traffic in the enclosure.)
+  @antenna :external
 
   # Endpoint / cluster constants
   @occupancy_endpoint 1
@@ -71,11 +79,19 @@ defmodule Firefly.Matter.Device do
     :gen_server.call(:matter_device, :factory_reset)
   end
 
+  @doc """
+  Scans every channel for Thread networks in range, without joining any.
+  Returns `{:ok, networks}`, each a map of `:name`, `:ext_pan_id` (hex),
+  `:pan_id`, `:channel` and `:rssi` (dBm), also printed to the console.
+  """
+  def thread_scan do
+    :gen_server.call(:matter_device, :thread_scan, 30_000)
+  end
+
   def init([]) do
     :io.format(~c"[Matter] initializing device stack\n")
 
     config = [
-      node_label: @node_label,
       vendor_id: @vendor_id,
       vendor_name: @vendor_name,
       product_id: @product_id,
@@ -87,25 +103,36 @@ defmodule Firefly.Matter.Device do
     case :matter_nif.init(config) do
       :ok ->
         :io.format(~c"[Matter] stack initialized\n")
+        :matter_nif.set_antenna(@antenna)
         endpoints = setup_endpoints()
 
-        case :matter_nif.start() do
-          :ok ->
-            :io.format(~c"[Matter] started\n")
-            sync_lights(endpoints)
-            print_setup_codes()
+        {commissioned, setup_code} =
+          case :matter_nif.start() do
+            :ok ->
+              :io.format(~c"[Matter] started\n")
+              sync_lights(endpoints)
+              {:matter_nif.commissioned(), setup_code()}
 
-          {:error, reason} ->
-            :io.format(~c"[Matter] start failed: ~p\n", [reason])
-        end
+            {:error, reason} ->
+              :io.format(~c"[Matter] start failed: ~p\n", [reason])
+              {false, nil}
+          end
 
-        {:ok,
-         Map.merge(endpoints, %{
-           commissioned: false,
-           fabric_id: nil,
-           occupancy: false,
-           hue_saturation: LightControl.initial()
-         })}
+        state =
+          Map.merge(endpoints, %{
+            commissioned: commissioned,
+            fabric_id: nil,
+            setup_code: setup_code,
+            occupancy: false,
+            hue_saturation: LightControl.initial(),
+            # nil, or {callers, networks found so far} while scanning
+            thread_scan: nil
+          })
+
+        :io.format(~c"[Matter] commissioned: ~p\n", [commissioned])
+        if not commissioned, do: show_setup_code(state)
+
+        {:ok, state}
 
       {:error, reason} ->
         :io.format(~c"[Matter] init failed: ~p\n", [reason])
@@ -126,7 +153,16 @@ defmodule Firefly.Matter.Device do
   def handle_call(:factory_reset, _from, state) do
     :io.format(~c"[Matter] factory reset — erasing all credentials\n")
     :matter_nif.factory_reset()
-    {:reply, :ok, %{state | commissioned: false, fabric_id: nil}}
+    state = %{state | commissioned: false, fabric_id: nil}
+    show_setup_code(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:thread_scan, from, state) do
+    case start_thread_scan(state, from) do
+      {:error, reason} -> {:reply, {:error, reason}, state}
+      state -> {:noreply, state}
+    end
   end
 
   def handle_call(_msg, _from, state) do
@@ -169,18 +205,54 @@ defmodule Firefly.Matter.Device do
           nil
       end
 
+    Lights.play(:idle)
     {:noreply, %{state | commissioned: true, fabric_id: fabric_id}}
   end
 
   def handle_info(:matter_decommissioned, state) do
     :io.format(~c"[Matter] device removed from fabric\n")
-    {:noreply, %{state | commissioned: false, fabric_id: nil}}
+    state = %{state | commissioned: false, fabric_id: nil}
+    show_setup_code(state)
+    {:noreply, state}
   end
 
   # Attribute write from controller (also sent for our own updates)
   def handle_info({:matter_write, endpoint, cluster, attr, value}, state) do
     :io.format(~c"[Matter] write ep=~p cl=~p attr=~p val=~p\n", [endpoint, cluster, attr, value])
     {:noreply, handle_write(endpoint, cluster, attr, value, state)}
+  end
+
+  def handle_info(
+        {:thread_network, name, ext_pan_id, pan_id, channel, rssi},
+        %{thread_scan: {callers, networks}} = state
+      ) do
+    network = %{
+      name: name,
+      ext_pan_id: Base.encode16(ext_pan_id),
+      pan_id: pan_id,
+      channel: channel,
+      rssi: rssi
+    }
+
+    {:noreply, %{state | thread_scan: {callers, [network | networks]}}}
+  end
+
+  def handle_info(:thread_scan_done, %{thread_scan: {callers, networks}} = state) do
+    networks = :lists.reverse(networks)
+    :io.format(~c"[Matter] Thread scan found ~p network(s)\n", [length(networks)])
+
+    for network <- networks do
+      :io.format(~c"[Matter]   ~s  ext_pan_id=~s pan_id=0x~.16B channel=~p rssi=~p dBm\n", [
+        network.name,
+        network.ext_pan_id,
+        network.pan_id,
+        network.channel,
+        network.rssi
+      ])
+    end
+
+    for caller <- callers, do: :gen_server.reply(caller, {:ok, networks})
+    {:noreply, %{state | thread_scan: nil}}
   end
 
   def handle_info(:reset_next_switch, state) do
@@ -198,6 +270,29 @@ defmodule Firefly.Matter.Device do
   def handle_info(_msg, state) do
     {:noreply, state}
   end
+
+  # --- Thread scan ---
+
+  # Starts a scan, or joins the one in progress. `caller` is nil for a scan
+  # that only prints its results. Returns the state, or {:error, reason} if
+  # the scan couldn't start.
+  defp start_thread_scan(%{thread_scan: {callers, networks}} = state, caller),
+    do: %{state | thread_scan: {add_caller(callers, caller), networks}}
+
+  defp start_thread_scan(state, caller) do
+    case :matter_nif.thread_scan() do
+      :ok ->
+        :io.format(~c"[Matter] scanning for Thread networks\n")
+        %{state | thread_scan: {add_caller([], caller), []}}
+
+      {:error, reason} ->
+        :io.format(~c"[Matter] Thread scan failed: ~p\n", [reason])
+        if caller, do: {:error, reason}, else: state
+    end
+  end
+
+  defp add_caller(callers, nil), do: callers
+  defp add_caller(callers, caller), do: [caller | callers]
 
   # --- Lights ---
 
@@ -287,16 +382,30 @@ defmodule Firefly.Matter.Device do
     nil
   end
 
-  defp print_setup_codes do
+  # Prints the setup codes, returning the manual pairing code (nil if they
+  # aren't available)
+  defp setup_code do
     case :matter_nif.get_setup_codes() do
       {:ok, codes} ->
         qr = :proplists.get_value(:qr_code, codes, "")
         manual = :proplists.get_value(:manual_code, codes, "")
         :io.format(~c"[Matter] QR Code:      ~s\n", [qr])
         :io.format(~c"[Matter] Manual code:  ~s\n", [manual])
+        if manual != "", do: manual
 
       {:error, reason} ->
         :io.format(~c"[Matter] Failed to get setup codes: ~p\n", [reason])
+        nil
     end
   end
+
+  defp show_setup_code(%{setup_code: nil}), do: :ok
+  defp show_setup_code(%{setup_code: code}), do: Lights.play(Text, text: format_code(code))
+
+  # 11-digit manual codes read more easily grouped as the Home app shows
+  # them, with spaces as they're narrower than dashes: 1234 567 8901
+  defp format_code(<<a::binary-size(4), b::binary-size(3), c::binary-size(4)>>),
+    do: <<a::binary, ?\s, b::binary, ?\s, c::binary>>
+
+  defp format_code(code), do: code
 end

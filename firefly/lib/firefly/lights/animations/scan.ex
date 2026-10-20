@@ -21,7 +21,7 @@ defmodule Firefly.Lights.Animations.Scan do
   @impl true
   def next_frame(state) do
     col = rem(state.step, Matrix.cols())
-    pixels = for row <- 0..(Matrix.rows() - 1), do: {row, col, state.color}
+    pixels = for row <- Matrix.row_indices(), do: {row, col, state.color}
 
     {Frame.pixels(pixels), state.interval, %{state | step: state.step + 1}}
   end

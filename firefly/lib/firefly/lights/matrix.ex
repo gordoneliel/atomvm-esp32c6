@@ -13,6 +13,19 @@ defmodule Firefly.Lights.Matrix do
   def cols, do: @cols
   def size, do: @rows * @cols
 
+  @row_indices Enum.to_list(0..(@rows - 1))
+  @col_indices Enum.to_list(0..(@cols - 1))
+
+  @doc """
+  The row numbers as a list. Loop over this rather than a range: on AtomVM,
+  comprehensions over ranges go through the `Enumerable` protocol and run
+  several times slower than over lists.
+  """
+  def row_indices, do: @row_indices
+
+  @doc "The column numbers as a list, see `row_indices/0`."
+  def col_indices, do: @col_indices
+
   def in_bounds?(row, col), do: row >= 0 and row < @rows and col >= 0 and col < @cols
 
   @doc "Strip index of the LED at `row`, `col`."

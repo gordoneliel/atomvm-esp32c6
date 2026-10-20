@@ -1,12 +1,18 @@
 # Firefly partition table (4MB flash)
 #
 # Same partitions as AtomVM's default layout, resized for the Matter firmware:
+#   nvs      - Matter fabrics and credentials, the Thread network, attributes
+#              and PHY calibration: 48K, as esp-matter's examples
+#   factory  - starts at the next 64K boundary after nvs and phy_init
 #   boot.avm - AtomVM's elixir_esp32boot.avm libraries (flashed by `firmware/idf.sh flash`)
 #   main.avm - the Firefly app (flashed by `mix atomvm.esp32.flash`)
 #
+# Changing nvs's size or offset needs `firmware/idf.sh erase-flash` before
+# flashing, or NVS finds the old contents of that flash corrupt.
+#
 # Name,   Type, SubType, Offset,   Size,     Flags
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x350000,
+nvs,      data, nvs,     0x9000,   0xC000,
+phy_init, data, phy,     0x15000,  0x1000,
+factory,  app,  factory, 0x20000,  0x340000,
 boot.avm, data, phy,     0x360000, 0x80000,
 main.avm, data, phy,     0x3E0000, 0x20000,

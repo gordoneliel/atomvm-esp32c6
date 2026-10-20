@@ -54,14 +54,10 @@ defmodule Firefly.Lights.Color do
   defp interpolate([{m, color} | _], mireds) when mireds <= m, do: color
 
   defp interpolate([{m1, c1}, {m2, c2} | _], mireds) when mireds <= m2,
-    do: mix(c1, c2, mireds - m1, m2 - m1)
+    do: blend(c1, c2, mireds - m1, m2 - m1)
 
   defp interpolate([_ | rest], mireds) when rest != [], do: interpolate(rest, mireds)
   defp interpolate([{_m, color}], _mireds), do: color
-
-  defp mix({r1, g1, b1}, {r2, g2, b2}, n, d) do
-    {r1 + div((r2 - r1) * n, d), g1 + div((g2 - g1) * n, d), b1 + div((b2 - b1) * n, d)}
-  end
 
   @doc "Scales a color by the fraction `numerator / denominator`."
   def scale({r, g, b}, numerator, denominator) do

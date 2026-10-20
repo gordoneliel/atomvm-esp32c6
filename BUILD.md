@@ -61,7 +61,7 @@ mix atomvm.esp32.flash --port /dev/cu.usbmodem1101
 The ESP32-C6 defaults are in `firmware/sdkconfig.defaults`:
 
 - BLE enabled (NimBLE) for Matter commissioning
-- IPv6 enabled for Thread/Matter
+- IPv6 enabled for Thread/Matter, with lwIP autoconfiguration off (OpenThread assigns the Thread addresses) and 8 addresses per interface
 - OpenThread FTD with SRP client and DNS client
-- Matter over Thread enabled
+- Matter over Thread enabled, advertising through SRP to the border router (`CONFIG_USE_MINIMAL_MDNS=n`)
 - Test DAC provider with discriminator `0xF00` and PIN `20202021`
