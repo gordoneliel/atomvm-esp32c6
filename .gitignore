@@ -9,3 +9,10 @@
 
 # macOS
 .DS_Store
+
+# Secrets
+.envrc
+
+# Firmware capsules
+*.cap
+extracted/
