@@ -1,0 +1,80 @@
+defmodule Firefly.Lights do
+  @moduledoc """
+  LED control: the 6x10 LED matrix and the status LED.
+
+  The matrix always runs one animation, a module implementing
+  `Firefly.Lights.Animation`. Play one of the named device states:
+
+      Firefly.Lights.play(:commissioning)
+
+  or any animation module with its options:
+
+      Firefly.Lights.play(Firefly.Lights.Animations.Pulse, color: {0, 0, 40})
+
+  Colors are `{r, g, b}` tuples (`0..255`), drawn at the matrix brightness.
+  """
+
+  alias Firefly.Lights.Animations.{Blink, Chevron, Pulse, Ripple, Scan, Solid}
+
+  @animations %{
+    idle: {Chevron, [direction: :right]},
+    arrow_right: {Chevron, [direction: :right]},
+    arrow_left: {Chevron, [direction: :left]},
+    commissioning: {Scan, [color: {0, 0, 40}]},
+    connected: {Pulse, [color: {0, 20, 0}]},
+    error: {Blink, [color: {30, 0, 0}]},
+    ripple: {Ripple, []}
+  }
+
+  # Order of the named animations for `cycle/0` (arrow_right is the same as idle)
+  @cycle [:idle, :commissioning, :connected, :error, :arrow_left, :ripple]
+
+  @doc "Names accepted by `play/1`."
+  def animations, do: Map.keys(@animations)
+
+  @doc "The animation module and options behind a named state."
+  def animation(name), do: Map.fetch!(@animations, name)
+
+  @doc "The named animation after `name` in the cycle, wrapping around (the first for any other name)."
+  def next(name), do: next_in(@cycle, name)
+
+  defp next_in([name, next | _rest], name), do: next
+  defp next_in([_ | rest], name), do: next_in(rest, name)
+  defp next_in([], _name), do: hd(@cycle)
+
+  @doc "Plays a named animation, see `animations/0`."
+  def play(name) when is_map_key(@animations, name) do
+    :gen_server.cast(:lights, {:play, name})
+  end
+
+  @doc "Plays an animation module with `opts`."
+  def play(module, opts) when is_atom(module) and is_list(opts) do
+    :gen_server.cast(:lights, {:play, module, opts})
+  end
+
+  @doc "Plays the next named animation in the cycle."
+  def cycle, do: :gen_server.cast(:lights, :cycle)
+
+  @doc "Sets every LED of the matrix to `color`."
+  def fill(color), do: play(Solid, color: color)
+
+  @doc "Turns the matrix off."
+  def off, do: play(Solid, [])
+
+  @doc "Turns the matrix on (resuming its animation) or off."
+  def set_power(on?) when is_boolean(on?), do: :gen_server.cast(:lights, {:power, on?})
+
+  @doc """
+  Sets the color of every animation, replacing their own colors, or `nil` to
+  go back to each animation's colors.
+  """
+  def set_color(color), do: :gen_server.cast(:lights, {:color, color})
+
+  @doc "Sets the matrix brightness (`0..255`)."
+  def set_brightness(level), do: :gen_server.cast(:lights, {:brightness, level})
+
+  @doc "Sets the status LED to `:blink`, `:on` or `:off`."
+  def status_led(mode) when mode in [:blink, :on, :off] do
+    :gen_server.cast(:status_led, {:mode, mode})
+  end
+end

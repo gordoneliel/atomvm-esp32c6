@@ -1,0 +1,12 @@
+# Firefly partition table (4MB flash)
+#
+# Same partitions as AtomVM's default layout, resized for the Matter firmware:
+#   boot.avm - AtomVM's elixir_esp32boot.avm libraries (flashed by `firmware/idf.sh flash`)
+#   main.avm - the Firefly app (flashed by `mix atomvm.esp32.flash`)
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x350000,
+boot.avm, data, phy,     0x360000, 0x80000,
+main.avm, data, phy,     0x3E0000, 0x20000,

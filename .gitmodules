@@ -1,4 +1,4 @@
 [submodule "AtomVM"]
 	path = AtomVM
-	url = git@github-gordoneliel:gordoneliel/AtomVM.git
-	branch = sesame-custom
+	url = https://github.com/atomvm/AtomVM.git
+	ignore = untracked

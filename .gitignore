@@ -3,3 +3,9 @@
 
 # Local tool logs
 .expert/
+
+# Firmware build output
+/build/
+
+# macOS
+.DS_Store

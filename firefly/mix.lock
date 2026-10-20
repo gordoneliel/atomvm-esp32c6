@@ -1,0 +1,5 @@
+%{
+  "atomvm": {:hex, :atomvm, "0.7.0-beta.0", "32325caa6882e3936817f0161bf2c55071cd990beef2a78d36e659576e931c8d", [:rebar3], [], "hexpm", "2244e40b11ba1231afed7c94c6ff158a6d394b72a4715fa313b941904ab8dc43"},
+  "exatomvm": {:git, "https://github.com/atomvm/ExAtomVM.git", "a99323a1054adda1ec00e9997bc41bc7317a3826", []},
+  "uf2tool": {:hex, :uf2tool, "1.1.0", "7091931234ca5a256b66ea691983867d51229798622d083f85c1ad779798a734", [:rebar3], [], "hexpm", "1a7e5ca7ef3d19c7a0b0acf3db804b3188e0980884acffa13fd57d733507b73d"},
+}
