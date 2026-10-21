@@ -13,7 +13,7 @@ defmodule Firefly.Lights.Animations.Scan do
   def init(opts) do
     %{
       color: Keyword.get(opts, :color, {0, 0, 40}),
-      interval: Keyword.get(opts, :interval, 80),
+      interval: Keyword.get(opts, :interval, 120),
       step: 0
     }
   end

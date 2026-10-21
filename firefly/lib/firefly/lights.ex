@@ -31,7 +31,8 @@ defmodule Firefly.Lights do
     idle: {Chevron, [direction: :right]},
     arrow_right: {Chevron, [direction: :right]},
     arrow_left: {Chevron, [direction: :left]},
-    commissioning: {Scan, [color: {0, 0, 40}]},
+    commissioning: {Scan, [color: {0, 80, 255}]},
+    offline: {Pulse, [color: {255, 90, 0}, period: 40, interval: 75]},
     connected: {Pulse, [color: {0, 20, 0}]},
     error: {Blink, [color: {30, 0, 0}]},
     ripple: {Ripple, []},
@@ -91,9 +92,28 @@ defmodule Firefly.Lights do
 
   @doc """
   Sets the color of every animation, replacing their own colors, or `nil` to
-  go back to each animation's colors.
+  go back to each animation's colors. The running animation is recolored as
+  it plays, without restarting.
   """
   def set_color(color), do: :gen_server.cast(:lights, {:color, color})
+
+  @doc """
+  Shows a named animation (see `animations/0`) over the current one as a
+  status, e.g. the device's state, until `set_status(nil)`; the current
+  animation carries on after. A status keeps its own colors, and like any
+  animation shows only while the power is on. Playing or cycling an
+  animation dismisses it.
+  """
+  def set_status(name) when name == nil or is_map_key(@animations, name),
+    do: :gen_server.cast(:lights, {:status, name})
+
+  @doc """
+  Identifies the device, e.g. when a controller asks which one it is: blinks
+  the matrix over the current animation, visibly even if it's off, until
+  `identify(false)` or for `ms` milliseconds. The animation carries on after.
+  """
+  def identify(on_or_ms) when is_boolean(on_or_ms) or is_integer(on_or_ms),
+    do: :gen_server.cast(:lights, {:identify, on_or_ms})
 
   @doc "Sets the matrix brightness (`0..255`)."
   def set_brightness(level), do: :gen_server.cast(:lights, {:brightness, level})

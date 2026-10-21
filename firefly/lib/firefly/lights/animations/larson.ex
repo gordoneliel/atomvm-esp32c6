@@ -19,7 +19,7 @@ defmodule Firefly.Lights.Animations.Larson do
     %{
       color: Keyword.get(opts, :color, {255, 0, 0}),
       fade: Keyword.get(opts, :fade, 50),
-      interval: Keyword.get(opts, :interval, 70),
+      interval: Keyword.get(opts, :interval, 100),
       # Brightness of each column, 0..255
       levels: :erlang.make_tuple(Matrix.cols(), 0),
       step: 0

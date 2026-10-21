@@ -24,7 +24,7 @@ defmodule Firefly.Lights.Animations.Life do
       color: Keyword.get(opts, :color, {40, 255, 0}),
       density: Keyword.get(opts, :density, 35),
       generations: Keyword.get(opts, :generations, 120),
-      interval: Keyword.get(opts, :interval, 250),
+      interval: Keyword.get(opts, :interval, 400),
       seed: Keyword.get_lazy(opts, :seed, &Random.seed/0),
       neighbors: neighbors(),
       # Boards are tuples of booleans (alive?) indexed by row * cols + col.

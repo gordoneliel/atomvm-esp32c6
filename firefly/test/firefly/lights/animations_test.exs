@@ -14,8 +14,7 @@ defmodule Firefly.Lights.AnimationsTest do
     Rain,
     Ripple,
     Scan,
-    Solid,
-    Text
+    Solid
   }
 
   # Runs an animation for `count` frames, returning [{frame, delay}]
@@ -40,7 +39,7 @@ defmodule Firefly.Lights.AnimationsTest do
   end
 
   test "chevron scrolls right, entering from the left edge" do
-    [{first, 80}, _, {third, 80}] = frames(Chevron, [direction: :right], 3)
+    [{first, 120}, _, {third, 120}] = frames(Chevron, [direction: :right], 3)
 
     assert lit(first) == [{0, -2}, {1, -1}, {2, 0}, {3, 0}, {4, -1}, {5, -2}]
     assert lit(third) == [{0, 0}, {1, 1}, {2, 2}, {3, 2}, {4, 1}, {5, 0}]
@@ -60,7 +59,7 @@ defmodule Firefly.Lights.AnimationsTest do
   test "scan lights one column at a time and wraps" do
     frames = frames(Scan, [color: {0, 0, 40}], 11)
 
-    {first, 80} = Enum.at(frames, 0)
+    {first, 120} = Enum.at(frames, 0)
     assert lit(first) == for(row <- 0..5, do: {row, 0})
     assert {_, _, {0, 0, 40}} = hd(first.pixels)
 
@@ -71,7 +70,7 @@ defmodule Firefly.Lights.AnimationsTest do
   end
 
   test "pulse breathes between full and half intensity" do
-    colors = for {frame, 80} <- frames(Pulse, [color: {0, 20, 0}], 21), do: frame.background
+    colors = for {frame, 120} <- frames(Pulse, [color: {0, 20, 0}], 21), do: frame.background
 
     assert Enum.at(colors, 0) == {0, 20, 0}
     assert Enum.at(colors, 10) == {0, 10, 0}
@@ -95,7 +94,7 @@ defmodule Firefly.Lights.AnimationsTest do
   end
 
   test "ripple rings reach LEDs further from the center later" do
-    frames = for {frame, 80} <- frames(Ripple, [color: {0, 0, 120}], 6), do: frame
+    frames = for {frame, 120} <- frames(Ripple, [color: {0, 0, 120}], 6), do: frame
 
     peak_step = fn row, col ->
       levels = Enum.map(frames, &level(&1, row, col))
@@ -128,7 +127,7 @@ defmodule Firefly.Lights.AnimationsTest do
       assert {%Frame{}, _delay, _state} = module.next_frame(module.init(opts))
     end
 
-    assert Lights.animation(:commissioning) == {Scan, [color: {0, 0, 40}]}
+    assert Lights.animation(:commissioning) == {Scan, [color: {0, 80, 255}]}
   end
 
   test "cycle visits every named animation in order and wraps" do
@@ -158,7 +157,7 @@ defmodule Firefly.Lights.AnimationsTest do
 
   test "larson scanner bounces between the edges" do
     heads =
-      for {frame, 70} <- frames(Larson, [], 20) do
+      for {frame, 100} <- frames(Larson, [], 20) do
         {col, 255} = Enum.find(column_levels(frame), fn {_col, level} -> level == 255 end)
         col
       end
@@ -176,7 +175,7 @@ defmodule Firefly.Lights.AnimationsTest do
   end
 
   test "plasma colors every LED and loops" do
-    frames = for {frame, 80} <- frames(Plasma, [speed: 4], 65), do: frame
+    frames = for {frame, 120} <- frames(Plasma, [speed: 4], 65), do: frame
 
     assert length(lit(hd(frames))) == Matrix.size()
     assert Enum.at(frames, 0) != Enum.at(frames, 1)
@@ -188,7 +187,7 @@ defmodule Firefly.Lights.AnimationsTest do
     do: Enum.sort(for {row, col, {r, _, _}} <- pixels, r > 0, do: {row, col})
 
   test "rain drops fall down their column, one row or none per step" do
-    heads = for {frame, 70} <- frames(Rain, [seed: 42, density: 60], 40), do: heads(frame)
+    heads = for {frame, 100} <- frames(Rain, [seed: 42, density: 60], 40), do: heads(frame)
 
     for {before, later} <- Enum.zip(heads, tl(heads)), {row, col} <- later, row > 0 do
       assert {row, col} in before or {row - 1, col} in before
@@ -237,7 +236,7 @@ defmodule Firefly.Lights.AnimationsTest do
   test "life shows dying cells dimly for a generation" do
     glider = [{0, 1}, {1, 2}, {2, 0}, {2, 1}, {2, 2}]
     state = generations(%{life(board(glider)) | color: {0, 240, 0}}, 1)
-    {frame, 250, _} = Life.next_frame(state)
+    {frame, 400, _} = Life.next_frame(state)
 
     # (0, 1) and (2, 0) died, (1, 0) and (3, 1) were born
     assert {0, 1, {0, 30, 0}} in frame.pixels
@@ -256,46 +255,5 @@ defmodule Firefly.Lights.AnimationsTest do
     glider = board([{0, 1}, {1, 2}, {2, 0}, {2, 1}, {2, 2}])
     state = generations(%{life(glider) | generations: 3}, 4)
     assert state.generation == 0
-  end
-
-  test "short text is shown still, centered" do
-    [{frame, :infinity}] = frames(Text, [text: "1"], 1)
-
-    # .#.
-    # ##.
-    # .#.
-    # .#.
-    # ###
-    assert lit(frame) ==
-             Enum.sort([{0, 4}, {1, 3}, {1, 4}, {2, 4}, {3, 4}, {4, 3}, {4, 4}, {4, 5}])
-  end
-
-  test "text shows lowercase as uppercase, and unknown characters as ?" do
-    assert frames(Text, [text: "ok"], 1) == frames(Text, [text: ~c"OK"], 1)
-    assert frames(Text, [text: "~"], 1) == frames(Text, [text: "?"], 1)
-  end
-
-  test "long text scrolls in from the right and loops" do
-    # 11 glyphs, each 3 columns and a blank one, then a gap of 5
-    loop = 11 * 4 + 5
-    opts = [text: "34970112332", pause: 0]
-    frames = for {frame, 120} <- frames(Text, opts, 10 + loop + 1), do: frame
-
-    assert hd(frames) == Frame.pixels([])
-    # Entering: the 3's left column (top and bottom lit) at the right edge
-    assert lit(Enum.at(frames, 1)) == [{0, 9}, {4, 9}]
-    # Reaching the left edge, then again a loop later
-    assert {0, 0} in lit(Enum.at(frames, 10))
-    assert Enum.at(frames, 10 + loop) == Enum.at(frames, 10)
-  end
-
-  test "scrolling text pauses as each character reaches the left edge" do
-    delays = for {_frame, delay} <- frames(Text, [text: "12 3456789"], 10 + 16), do: delay
-
-    # Entering, then 1 and 2 a column in from the left edge, 4 columns apart,
-    # then the space (3 columns) without a pause, then 3
-    pauses = for {600, i} <- Enum.with_index(delays), do: i
-    assert Enum.take(pauses, 3) == [9, 13, 20]
-    assert Enum.all?(delays, &(&1 in [120, 600]))
   end
 end

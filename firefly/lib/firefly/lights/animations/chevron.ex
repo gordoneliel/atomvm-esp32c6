@@ -25,7 +25,7 @@ defmodule Firefly.Lights.Animations.Chevron do
     %{
       direction: Keyword.get(opts, :direction, :right),
       color: Keyword.get(opts, :color, {0, 180, 255}),
-      interval: Keyword.get(opts, :interval, 80),
+      interval: Keyword.get(opts, :interval, 120),
       step: 0
     }
   end

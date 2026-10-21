@@ -59,6 +59,37 @@ defmodule Firefly.Lights.Color do
   defp interpolate([_ | rest], mireds) when rest != [], do: interpolate(rest, mireds)
   defp interpolate([{_m, color}], _mireds), do: color
 
+  @doc """
+  Full-intensity color for a CIE 1931 xy chromaticity on Matter's scale
+  (`0..65279` for each, the coordinate times 65536), through linear sRGB.
+  Colors outside sRGB clip to its edge.
+  """
+  def from_xy(_x, 0), do: {255, 255, 255}
+
+  def from_xy(x, y) do
+    cx = x / 65536
+    cy = y / 65536
+
+    # XYZ at luminance Y = 1, then linear sRGB (D65)
+    big_x = cx / cy
+    big_z = (1 - cx - cy) / cy
+
+    rgb = [
+      max(0.0, 3.2406 * big_x - 1.5372 - 0.4986 * big_z),
+      max(0.0, -0.9689 * big_x + 1.8758 + 0.0415 * big_z),
+      max(0.0, 0.0557 * big_x - 0.2040 + 1.0570 * big_z)
+    ]
+
+    case :lists.max(rgb) do
+      peak when peak > 0 ->
+        [r, g, b] = for c <- rgb, do: round(c * 255 / peak)
+        {r, g, b}
+
+      _ ->
+        {255, 255, 255}
+    end
+  end
+
   @doc "Scales a color by the fraction `numerator / denominator`."
   def scale({r, g, b}, numerator, denominator) do
     {div(r * numerator, denominator), div(g * numerator, denominator),

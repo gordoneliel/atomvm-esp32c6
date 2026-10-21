@@ -17,6 +17,10 @@ defmodule Firefly.Lights.Animation do
       end
 
       Firefly.Lights.play(MyAnimation, color: {40, 0, 0})
+
+  An animation that takes a `:color` option should keep it in its state as a
+  map's `:color` and read it each frame: `Firefly.Lights.set_color/1` then
+  recolors the animation as it plays, rather than restarting it.
   """
 
   alias Firefly.Lights.Frame

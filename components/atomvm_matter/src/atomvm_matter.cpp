@@ -11,6 +11,8 @@
  *   matter_nif:commissioned/0            - Whether the device is on any fabric
  *   matter_nif:thread_scan/0             - Scan for Thread networks in range
  *   matter_nif:set_antenna/1             - Select the XIAO ESP32-C6 antenna
+ *   matter_nif:get_attribute/3           - Read an attribute's value
+ *   matter_nif:thread_status/0           - Thread role and neighbor count
  *   matter_nif:open_commissioning_window/1 - Open commissioning window
  *   matter_nif:close_commissioning_window/0 - Close commissioning window
  *   matter_nif:respond_read/4            - Respond to attribute read callback
@@ -20,6 +22,7 @@
  *   :matter_decommissioned
  *   {:matter_read, endpoint, cluster, attr}
  *   {:matter_write, endpoint, cluster, attr, value}
+ *   {:matter_identify, endpoint, :start | :stop | :effect, effect_id}
  *   {:thread_network, name, ext_pan_id, pan_id, channel, rssi}, then
  *   :thread_scan_done (after matter_nif:thread_scan/0)
  */
@@ -429,6 +432,8 @@ static esp_err_t matter_attribute_update_cb(
     return ESP_OK;
 }
 
+/* Identify: a controller asking the device to show which one it is, either
+ * for a time (START, then STOP) or with a one-off effect (EFFECT) */
 static esp_err_t matter_identification_cb(
     identification::callback_type_t type,
     uint16_t endpoint_id,
@@ -436,7 +441,33 @@ static esp_err_t matter_identification_cb(
     uint8_t effect_variant,
     void *priv_data)
 {
-    ESP_LOGI(TAG, "Identify callback: endpoint=%d effect=%d", endpoint_id, effect_id);
+    UNUSED(effect_variant);
+    UNUSED(priv_data);
+    ESP_LOGI(TAG, "Identify callback: endpoint=%d type=%d effect=%d", endpoint_id, type, effect_id);
+    if (s_owner_pid < 0 || s_global == NULL) return ESP_OK;
+
+    AtomString type_atom;
+    switch (type) {
+        case identification::START: type_atom = ATOM_STR("\x5", "start"); break;
+        case identification::STOP: type_atom = ATOM_STR("\x4", "stop"); break;
+        case identification::EFFECT: type_atom = ATOM_STR("\x6", "effect"); break;
+        default: return ESP_OK;
+    }
+
+    /* Send {:matter_identify, endpoint, type, effect_id} */
+    BEGIN_WITH_STACK_HEAP(TUPLE_SIZE(4), heap);
+    {
+        term msg = term_alloc_tuple(4, &heap);
+        term_put_tuple_element(msg, 0,
+            globalcontext_make_atom(s_global, ATOM_STR("\xF", "matter_identify")));
+        term_put_tuple_element(msg, 1, term_from_int(endpoint_id));
+        term_put_tuple_element(msg, 2, globalcontext_make_atom(s_global, type_atom));
+        term_put_tuple_element(msg, 3, term_from_int(effect_id));
+        port_send_message_from_task(s_global,
+            term_from_local_process_id(s_owner_pid), msg);
+    }
+    END_WITH_STACK_HEAP(heap, s_global);
+
     return ESP_OK;
 }
 
@@ -631,10 +662,22 @@ static term nif_matter_add_endpoint(Context *ctx, int argc, term argv[])
             break;
         }
         case 0x010D: {
-            /* Extended Color Light — starts on, with the color mode set to hue/saturation */
+            /* Extended Color Light. A new device starts on, with the color
+             * mode set to hue/saturation; after that it comes back as it was
+             * (StartUpOnOff, StartUpCurrentLevel and
+             * StartUpColorTemperatureMireds null: the previous value, rather
+             * than the SDK's defaults of off, the minimum level and 250
+             * mireds). Controllers can still change those attributes. */
             extended_color_light::config_t config;
             config.on_off.on_off = true;
+            config.on_off_lighting.start_up_on_off = nullable<uint8_t>();
             config.level_control.current_level = (uint8_t)64;
+            config.level_control_lighting.start_up_current_level = nullable<uint8_t>();
+            /* The whites Firefly.Lights.Color.from_mireds/1 covers: 6500K to 2000K */
+            config.color_control_color_temperature.color_temp_physical_min_mireds = 153;
+            config.color_control_color_temperature.color_temp_physical_max_mireds = 500;
+            config.color_control_color_temperature.couple_color_temp_to_level_min_mireds = 153;
+            config.color_control_color_temperature.start_up_color_temperature_mireds = nullable<uint16_t>();
             config.color_control.color_mode =
                 (uint8_t)ColorControl::ColorModeEnum::kCurrentHueAndCurrentSaturation;
             config.color_control.enhanced_color_mode =
@@ -882,6 +925,94 @@ static term nif_matter_thread_scan(Context *ctx, int argc, term argv[])
 }
 
 /*
+ * matter_nif:get_attribute/3 - Read an attribute's value
+ * Args: endpoint_id, cluster_id, attribute_id (integers)
+ * Returns: {:ok, value} (booleans as 0/1, like {:matter_write, ...} values;
+ *          a null value as the type's null, e.g. 255 for a nullable u8) |
+ *          {:error, :not_found}
+ */
+static term nif_matter_get_attribute(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    if (!term_is_integer(argv[0]) || !term_is_integer(argv[1]) || !term_is_integer(argv[2])) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    uint16_t endpoint_id = (uint16_t) term_to_int(argv[0]);
+    uint32_t cluster_id = (uint32_t) term_to_int(argv[1]);
+    uint32_t attribute_id = (uint32_t) term_to_int(argv[2]);
+
+    esp_matter_attr_val_t val = esp_matter_invalid(NULL);
+    chip::DeviceLayer::PlatformMgr().LockChipStack();
+    esp_err_t err = attribute::get_val(endpoint_id, cluster_id, attribute_id, &val);
+    chip::DeviceLayer::PlatformMgr().UnlockChipStack();
+
+    if (err != ESP_OK) {
+        return make_error(ctx, globalcontext_make_atom(ctx->global, ATOM_STR("\x9", "not_found")));
+    }
+
+    if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term t = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(t, 0, OK_ATOM);
+    term_put_tuple_element(t, 1, term_from_int(attr_val_to_int(&val)));
+    return t;
+}
+
+/*
+ * matter_nif:thread_status/0 - The device's Thread role, and how many Thread
+ * devices it's in touch with: its neighbors, or for a child its parent. (A
+ * leader with none has made a network of its own, reaching nobody.)
+ * Returns: {:disabled | :detached | :child | :router | :leader, neighbors}
+ */
+static term nif_matter_thread_status(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    UNUSED(argv);
+
+    otDeviceRole role = OT_DEVICE_ROLE_DISABLED;
+    int neighbors = 0;
+
+    if (s_started) {
+        otInstance *instance = esp_openthread_get_instance();
+        esp_openthread_lock_acquire(portMAX_DELAY);
+
+        role = otThreadGetDeviceRole(instance);
+        otNeighborInfoIterator iterator = OT_NEIGHBOR_INFO_ITERATOR_INIT;
+        otNeighborInfo info;
+        while (otThreadGetNextNeighborInfo(instance, &iterator, &info) == OT_ERROR_NONE) {
+            neighbors++;
+        }
+        otRouterInfo parent;
+        if (role == OT_DEVICE_ROLE_CHILD && neighbors == 0
+                && otThreadGetParentInfo(instance, &parent) == OT_ERROR_NONE) {
+            neighbors = 1;
+        }
+
+        esp_openthread_lock_release();
+    }
+
+    AtomString role_atom;
+    switch (role) {
+        case OT_DEVICE_ROLE_DETACHED: role_atom = ATOM_STR("\x8", "detached"); break;
+        case OT_DEVICE_ROLE_CHILD: role_atom = ATOM_STR("\x5", "child"); break;
+        case OT_DEVICE_ROLE_ROUTER: role_atom = ATOM_STR("\x6", "router"); break;
+        case OT_DEVICE_ROLE_LEADER: role_atom = ATOM_STR("\x6", "leader"); break;
+        default: role_atom = ATOM_STR("\x8", "disabled"); break;
+    }
+
+    if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term t = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(t, 0, globalcontext_make_atom(ctx->global, role_atom));
+    term_put_tuple_element(t, 1, term_from_int(neighbors));
+    return t;
+}
+
+/*
  * matter_nif:set_antenna/1 - Select the XIAO ESP32-C6's antenna: :internal
  * (built-in ceramic), :external (U.FL connector), or :switch_off (RF switch
  * control disabled, the board's power-on state). For testing reception;
@@ -1053,6 +1184,8 @@ static const struct Nif matter_add_endpoint_nif = { .base = { .type = NIFFunctio
 static const struct Nif matter_set_attribute_nif = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_set_attribute };
 static const struct Nif matter_report_nif       = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_report };
 static const struct Nif matter_get_fabric_nif   = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_get_fabric_info };
+static const struct Nif matter_thread_status_nif = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_thread_status };
+static const struct Nif matter_get_attribute_nif = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_get_attribute };
 static const struct Nif matter_set_antenna_nif  = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_set_antenna };
 static const struct Nif matter_thread_scan_nif  = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_thread_scan };
 static const struct Nif matter_commissioned_nif = { .base = { .type = NIFFunctionType }, .nif_ptr = nif_matter_commissioned };
@@ -1073,6 +1206,8 @@ const struct Nif *atomvm_matter_resolve_nif(const char *nifname)
     if (strcmp("matter_nif:commissioned/0", nifname) == 0)            return &matter_commissioned_nif;
     if (strcmp("matter_nif:thread_scan/0", nifname) == 0)             return &matter_thread_scan_nif;
     if (strcmp("matter_nif:set_antenna/1", nifname) == 0)             return &matter_set_antenna_nif;
+    if (strcmp("matter_nif:get_attribute/3", nifname) == 0)           return &matter_get_attribute_nif;
+    if (strcmp("matter_nif:thread_status/0", nifname) == 0)           return &matter_thread_status_nif;
     if (strcmp("matter_nif:open_commissioning_window/1", nifname) == 0) return &matter_open_comm_nif;
     if (strcmp("matter_nif:close_commissioning_window/0", nifname) == 0) return &matter_close_comm_nif;
     if (strcmp("matter_nif:factory_reset/0", nifname) == 0)           return &matter_factory_reset_nif;

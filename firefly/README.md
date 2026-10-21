@@ -1,6 +1,6 @@
 # Firefly
 
-Elixir application for the Firefly Matter occupancy sensor, running on AtomVM.
+Elixir application for the Firefly Matter LED matrix light, running on AtomVM.
 
 ## Build and flash
 

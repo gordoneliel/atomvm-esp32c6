@@ -1,21 +1,30 @@
-# Stands in for the LED strip NIF: keeps the LEDs in the drawing process's
-# dictionary and sends them to the test on each refresh
+# Stands in for the LED strip NIF: draws each frame as the NIF does, and
+# sends the LEDs (indexed as on the strip) to the test
 defmodule :led_strip_nif do
-  def init(_pin, size) do
-    Process.put(:leds, :erlang.make_tuple(size, {0, 0, 0}))
+  alias Firefly.Lights.{Color, Matrix}
+
+  def init(_pin, _size), do: :ok
+
+  def show(background, pixels, brightness, _rows) do
+    leds = :erlang.make_tuple(Matrix.size(), Color.scale(background, brightness))
+
+    leds =
+      Enum.reduce(pixels, leds, fn {row, col, color}, leds ->
+        if Matrix.in_bounds?(row, col),
+          do: put_elem(leds, Matrix.index(row, col), Color.scale(color, brightness)),
+          else: leds
+      end)
+
+    send(:persistent_term.get(:led_strip_test), {:refresh, leds})
     :ok
   end
-
-  def fill(r, g, b), do: Process.put(:leds, :erlang.make_tuple(60, {r, g, b}))
-  def set_pixel(i, r, g, b), do: Process.put(:leds, put_elem(Process.get(:leds), i, {r, g, b}))
-  def refresh, do: send(:persistent_term.get(:led_strip_test), {:refresh, Process.get(:leds)})
 end
 
 defmodule Firefly.Lights.ServerTest do
   use ExUnit.Case, async: false
 
   alias Firefly.Lights
-  alias Firefly.Lights.Animations.Solid
+  alias Firefly.Lights.Animations.{Pulse, Solid}
 
   setup do
     :persistent_term.put(:led_strip_test, self())
@@ -82,5 +91,129 @@ defmodule Firefly.Lights.ServerTest do
 
     # Still fading out the error animation's red, with no jump back up
     assert List.last(dims_to_black(refreshes())) == {0, 0, 200}
+  end
+
+  # The first LED's color on each refresh for `ms` milliseconds
+  defp refreshes_for(ms) do
+    deadline = :erlang.monotonic_time(:millisecond) + ms
+    collect_until(deadline)
+  end
+
+  defp collect_until(deadline) do
+    receive do
+      {:refresh, leds} -> [elem(leds, 0) | collect_until(deadline)]
+    after
+      max(0, deadline - :erlang.monotonic_time(:millisecond)) -> []
+    end
+  end
+
+  test "changing the color recolors a still animation in place" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+
+    Lights.set_color({0, 0, 200})
+    assert refreshes() == [{0, 0, 200}]
+  end
+
+  test "changing the color recolors a moving animation without a dip to black" do
+    Lights.play(Pulse, color: {0, 200, 0})
+    refreshes_for(300)
+
+    Lights.set_color({200, 0, 0})
+    colors = refreshes_for(300)
+
+    assert {0, 0, 0} not in colors
+    assert {r, 0, 0} = List.last(colors)
+    assert r > 0
+  end
+
+  test "identifying blinks over the animation, then it comes back" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+
+    Lights.identify(600)
+    colors = refreshes_for(1_000)
+
+    assert {255, 255, 255} in colors
+    assert List.last(colors) == {0, 200, 0}
+  end
+
+  test "identifying shows even when the light is off" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+    Lights.set_power(false)
+    refreshes()
+
+    Lights.identify(true)
+    assert {255, 255, 255} in refreshes_for(600)
+
+    Lights.identify(false)
+    assert List.last(refreshes()) == {0, 0, 0}
+  end
+
+  test "power and color changes while identifying apply when it ends" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+
+    Lights.identify(true)
+    Lights.set_color({0, 0, 200})
+    refreshes_for(300)
+
+    Lights.identify(false)
+    assert List.last(refreshes()) == {0, 0, 200}
+  end
+
+  test "a burst of brightness changes draws only the latest" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+
+    for level <- 1..100, do: Lights.set_brightness(level)
+    colors = refreshes()
+
+    assert length(colors) < 100
+    assert List.last(colors) == {0, div(200 * 100, 255), 0}
+  end
+
+  test "a status shows over the animation, which comes back after" do
+    Lights.play(Solid, color: {0, 200, 0})
+    refreshes()
+
+    Lights.set_status(:offline)
+    {r, g, 0} = List.last(refreshes_for(300))
+    assert r > g and g > 0
+
+    Lights.set_status(nil)
+    assert List.last(refreshes()) == {0, 200, 0}
+  end
+
+  test "a status keeps its colors, and the light's color applies after" do
+    Lights.play(Solid, color: {0, 200, 0})
+    Lights.set_status(:offline)
+    refreshes_for(300)
+
+    Lights.set_color({0, 0, 200})
+    {r, _g, 0} = List.last(refreshes_for(300))
+    assert r > 0
+
+    Lights.set_status(nil)
+    assert List.last(refreshes()) == {0, 0, 200}
+  end
+
+  test "a status shows only while the power is on" do
+    Lights.play(Solid, color: {0, 200, 0})
+    Lights.set_power(false)
+    refreshes()
+
+    Lights.set_status(:offline)
+    assert Enum.all?(refreshes_for(300), &(&1 == {0, 0, 0}))
+  end
+
+  test "playing an animation dismisses the status" do
+    Lights.play(Solid, color: {0, 200, 0})
+    Lights.set_status(:offline)
+    refreshes_for(300)
+
+    Lights.play(Solid, color: {0, 0, 200})
+    assert List.last(refreshes()) == {0, 0, 200}
   end
 end

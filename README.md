@@ -1,10 +1,10 @@
 # Firefly
 
-A Matter-over-Thread occupancy sensor running Elixir on the ESP32-C6, built on [AtomVM](https://github.com/atomvm/AtomVM).
+A Matter-over-Thread light running Elixir on the ESP32-C6, built on [AtomVM](https://github.com/atomvm/AtomVM).
 
 ## Overview
 
-Firefly is a presence sensor that exposes an occupancy sensing cluster over the Matter smart home protocol. It runs on a XIAO ESP32-C6, using Thread (802.15.4) mesh networking and BLE for commissioning.
+Firefly is a 6x10 LED matrix lamp that shows up in Matter smart home apps (such as Apple Home) as a color light, with a switch to step through its animations. It runs on a XIAO ESP32-C6, using Thread (802.15.4) mesh networking and BLE for commissioning.
 
 The application logic is written entirely in Elixir, running on AtomVM with custom C NIF components for Matter and the LED strip. AtomVM itself is unmodified upstream.
 
@@ -65,14 +65,14 @@ firefly/
 | `Firefly.Lights.StatusLed` | Status LED on GPIO15: blink, on or off |
 | `Firefly.Lights.Server` | Runs the current LED matrix animation |
 | `Firefly.Lights.Button` | BOOT button: each press plays the next animation |
-| `Firefly.Matter.Device` | Matter stack lifecycle, occupancy sensor endpoint |
+| `Firefly.Matter.Device` | Matter stack lifecycle, light and next-animation switch endpoints |
 
 ### LED control
 
 `Firefly.Lights` is the API for both LEDs:
 
 ```elixir
-Firefly.Lights.play(:commissioning)          # named: idle, commissioning, connected, error, arrow_left, arrow_right, ripple
+Firefly.Lights.play(:commissioning)          # named: idle, commissioning, connected, error, arrow_left, arrow_right, ripple, scanner, plasma, rain, life
 Firefly.Lights.play(Firefly.Lights.Animations.Pulse, color: {0, 0, 40})
 Firefly.Lights.fill({20, 0, 20})
 Firefly.Lights.set_brightness(128)
@@ -87,11 +87,24 @@ An animation is a module implementing `Firefly.Lights.Animation`: `init/1` turns
 | Endpoint | Device type | Clusters | In Apple Home |
 |----------|-------------|----------|---------------|
 | 0 | Root Node | (managed by SDK) | |
-| 1 | Occupancy Sensor (0x0107) | Occupancy Sensing (0x0406) | Occupancy sensor |
-| 2 | Extended Color Light (0x010D) | On/Off, Level Control, Color Control (hue/saturation, color temperature) | LED matrix: on/off, brightness and color of the current animation |
-| 3 | On/Off Plug-in Unit (0x010A) | On/Off | "Next animation" switch: turning it on plays the next animation (like the BOOT button), then it switches back off |
+| 1 | Extended Color Light (0x010D) | On/Off, Level Control, Color Control (hue/saturation, color temperature) | LED matrix: on/off, brightness and color of the current animation |
+| 2 | On/Off Plug-in Unit (0x010A) | On/Off | "Next animation" switch: turning it on plays the next animation (like the BOOT button), then it switches back off |
 
-Writes from the controller arrive in `Firefly.Matter.Device` and are mapped to `Firefly.Lights` by `Firefly.Matter.LightControl`. A color set from Home replaces the animations' own colors until the device restarts.
+Writes from the controller arrive in `Firefly.Matter.Device` and are mapped to `Firefly.Lights` by `Firefly.Matter.LightControl`:
+
+- **Color**: hue/saturation, XY and color temperature (153 to 500 mireds, 6500K to 2000K) all work. A color set from Home replaces the animations' own colors, which they keep until one is first set. Changing the color recolors the running animation without restarting it, so the SDK's stepped color transitions play smoothly.
+- **Start-up**: after a restart the light comes back as it was: on/off, brightness and color (the `StartUpOnOff`, `StartUpCurrentLevel` and `StartUpColorTemperatureMireds` attributes are null, Matter's "previous value"; controllers can change them).
+- **Identify**: identifying from a controller blinks the matrix white, even when it's off, then the animation carries on.
+
+The matrix also shows the device's state (`Firefly.Matter.Status`), as a status animation over the current one:
+
+| State | Matrix |
+|-------|--------|
+| Not commissioned, waiting to be added to a home | Blue scan (`:commissioning`) |
+| Commissioned and connected over Thread | The current animation, driven by Matter |
+| Commissioned, but no Thread connection for 10 s | Slow amber pulse (`:offline`) |
+
+Status animations show only while the light is on, and a press of the BOOT button dismisses one until the state changes again.
 
 ## Quick start
 

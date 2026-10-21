@@ -23,7 +23,7 @@ defmodule Firefly.Lights.Animations.Rain do
       color: Keyword.get(opts, :color, {0, 255, 70}),
       density: Keyword.get(opts, :density, 45),
       tail: Keyword.get(opts, :tail, 3),
-      interval: Keyword.get(opts, :interval, 70),
+      interval: Keyword.get(opts, :interval, 100),
       seed: Keyword.get_lazy(opts, :seed, &Random.seed/0),
       # {col, row of the head, slow?}
       drops: [],

@@ -21,7 +21,7 @@ defmodule Firefly.Lights.Animations.Ripple do
       speed: Keyword.get(opts, :speed, 5),
       spacing: Keyword.get(opts, :spacing, 30),
       width: Keyword.get(opts, :width, 12),
-      interval: Keyword.get(opts, :interval, 80),
+      interval: Keyword.get(opts, :interval, 120),
       distances: distances(),
       phase: 0
     }

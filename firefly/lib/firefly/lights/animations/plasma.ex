@@ -19,7 +19,7 @@ defmodule Firefly.Lights.Animations.Plasma do
   def init(opts) do
     %{
       speed: Keyword.get(opts, :speed, 6),
-      interval: Keyword.get(opts, :interval, 80),
+      interval: Keyword.get(opts, :interval, 120),
       sine: sine(),
       waves: waves(),
       time: 0

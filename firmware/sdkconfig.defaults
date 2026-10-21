@@ -54,6 +54,27 @@ CONFIG_CUSTOM_DEVICE_INSTANCE_INFO_PROVIDER=y
 # Keep BLE up while the commissioner establishes CASE over Thread
 CONFIG_ENABLE_CONCURRENT_CONNECTION=y
 
+# Memory: the ESP32-C6 has no PSRAM, and while pairing, BLE, Thread and
+# Matter's crypto all run at once on ~230K of heap.
+# BLE: Matter uses one connection, as a peripheral (CHIPoBLE single
+# connection); a commissioner does the scanning and connecting
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+# The BLE controller's code runs from flash instead of RAM (~22K), at some
+# cost in BLE speed: BLE is only used while commissioning. (ESP-IDF marks
+# this experimental and suggests SPI_FLASH_AUTO_SUSPEND alongside, which
+# depends on the flash chip, so it's left off: flash writes while a BLE
+# connection is up just delay the controller's interrupts.)
+CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y
+# Matter: the root node, the light and the next-animation switch, and a spare
+CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT=4
+# Thread: as a router, room for fewer children than the default 10, and
+# fewer message buffers than the default 65 (each 128 bytes: 48 still hold
+# several full 1280-byte IPv6 packets)
+CONFIG_OPENTHREAD_MLE_MAX_CHILDREN=5
+CONFIG_OPENTHREAD_NUM_MESSAGE_BUFFERS=48
+
 # Crypto (Matter requires)
 CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y
 CONFIG_MBEDTLS_CMAC_C=y

@@ -15,7 +15,7 @@ defmodule Firefly.Lights.Animations.Pulse do
     %{
       color: Keyword.get(opts, :color, {0, 20, 0}),
       period: Keyword.get(opts, :period, 20),
-      interval: Keyword.get(opts, :interval, 80),
+      interval: Keyword.get(opts, :interval, 120),
       step: 0
     }
   end
